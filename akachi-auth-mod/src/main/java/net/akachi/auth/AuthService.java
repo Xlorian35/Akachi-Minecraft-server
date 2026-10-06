@@ -13,8 +13,11 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -26,11 +29,13 @@ final class AuthService {
     private static final HttpClient HTTP = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10)).build();
     private static final Set<UUID> PENDING = ConcurrentHashMap.newKeySet();
+    private static final ConcurrentHashMap<UUID, Long> AUTHENTICATED_UNTIL = new ConcurrentHashMap<>();
 
     private AuthService() {}
 
     static void requireAuthentication(ServerPlayer player) {
         UUID id = player.getUUID();
+        AUTHENTICATED_UNTIL.remove(id);
         PENDING.add(id);
         MinecraftServer server = player.getServer();
         if (server != null) {
@@ -52,6 +57,13 @@ final class AuthService {
         if (token == null || token.isBlank() || token.length() > 8192) {
             if (PENDING.remove(playerId)) {
                 disconnect(player, "Akachi Launcher oturumu bulunamadı. Oyunu Akachi Launcher üzerinden başlat.");
+            }
+            return;
+        }
+        long expiresAt = tokenExpiryEpochSeconds(token);
+        if (expiresAt <= Instant.now().getEpochSecond()) {
+            if (PENDING.remove(playerId)) {
+                disconnect(player, "Akachi oturumunun süresi dolmuş. Akachi Launcher'dan tekrar giriş yap.");
             }
             return;
         }
@@ -79,9 +91,42 @@ final class AuthService {
                     if (!PENDING.remove(player.getUUID())) return;
                     if (!result) {
                         disconnect(player, "Akachi hesabı bu Minecraft kullanıcı adına bağlı değil veya oturum geçersiz.");
+                    } else {
+                        AUTHENTICATED_UNTIL.put(player.getUUID(), expiresAt);
+                        scheduleExpiryKick(player, expiresAt);
                     }
                 });
             }
+        });
+    }
+
+    private static long tokenExpiryEpochSeconds(String token) {
+        try {
+            String[] segments = token.split("\\.");
+            if (segments.length != 3) return 0L;
+            byte[] payload = java.util.Base64.getUrlDecoder().decode(segments[1]);
+            JsonObject claims = JsonParser.parseString(new String(payload, StandardCharsets.UTF_8)).getAsJsonObject();
+            JsonElement expiry = claims.get("exp");
+            return expiry == null || expiry.isJsonNull() ? 0L : expiry.getAsLong();
+        } catch (Exception ignored) {
+            return 0L;
+        }
+    }
+
+    private static void scheduleExpiryKick(ServerPlayer player, long expiresAt) {
+        UUID playerId = player.getUUID();
+        long delayMillis = Math.max(0L, expiresAt * 1000L - System.currentTimeMillis());
+        CompletableFuture.delayedExecutor(delayMillis, TimeUnit.MILLISECONDS).execute(() -> {
+            MinecraftServer server = player.getServer();
+            if (server == null) return;
+            server.execute(() -> {
+                Long activeExpiry = AUTHENTICATED_UNTIL.get(playerId);
+                if (activeExpiry != null && activeExpiry == expiresAt
+                        && server.getPlayerList().getPlayer(playerId) == player) {
+                    AUTHENTICATED_UNTIL.remove(playerId, activeExpiry);
+                    disconnect(player, "Akachi oturumunun süresi doldu. Tekrar giriş yapıp oyuna yeniden bağlan.");
+                }
+            });
         });
     }
 
