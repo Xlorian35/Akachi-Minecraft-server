@@ -45,6 +45,7 @@ import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.Toolkit;
+import java.awt.datatransfer.StringSelection;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.BufferedReader;
@@ -106,8 +107,8 @@ import static java.awt.GridBagConstraints.WEST;
 public final class AkachiLauncher {
     private static final String REPOSITORY = "Xlorian35/Akachi-Minecraft-server";
     private static final String BRANCH = "main";
-    private static final String LAUNCHER_VERSION = "V0.7.7";
-    private static final String UPDATE_BUILD = "V0.7.7";
+    private static final String LAUNCHER_VERSION = "V0.7.9";
+    private static final String UPDATE_BUILD = "V0.7.9";
     private static final String VERSION_URL = "https://raw.githubusercontent.com/" + REPOSITORY + "/" + BRANCH + "/launcher/version.txt";
     private static final String SETUP_DOWNLOAD_URL = "https://raw.githubusercontent.com/" + REPOSITORY + "/" + BRANCH + "/AkachiLauncherSetup.exe";
     private static final String MINECRAFT_VERSION = "1.20.1";
@@ -1364,7 +1365,12 @@ public final class AkachiLauncher {
         serverAddress.setAlignmentX(Component.LEFT_ALIGNMENT);
         details.add(statusLine);
         details.add(Box.createVerticalStrut(4));
-        details.add(serverAddress);
+        JPanel addressLine = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        addressLine.setOpaque(false);
+        addressLine.add(serverAddress);
+        addressLine.add(createCopyAddressButton());
+        addressLine.setAlignmentX(Component.LEFT_ALIGNMENT);
+        details.add(addressLine);
         panel.add(details, BorderLayout.CENTER);
 
         pingButton.setText("Durumu yenile");
@@ -1377,6 +1383,30 @@ public final class AkachiLauncher {
         return panel;
     }
 
+    private JButton createCopyAddressButton() {
+        JButton button = actionButton("Kopyala", false);
+        button.setFont(new Font("Segoe UI", Font.BOLD, 10));
+        button.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(58, 69, 84)),
+                new EmptyBorder(4, 8, 4, 8)));
+        button.setPreferredSize(new Dimension(70, 25));
+        button.setEnabled(!SERVER_HOST.isBlank());
+        button.setToolTipText("Sunucu adresini panoya kopyala");
+        button.addActionListener(e -> {
+            try {
+                Toolkit.getDefaultToolkit().getSystemClipboard()
+                        .setContents(new StringSelection(serverAddress.getText()), null);
+                button.setText("✓");
+                javax.swing.Timer resetTimer = new javax.swing.Timer(1200,
+                        event -> button.setText("Kopyala"));
+                resetTimer.setRepeats(false);
+                resetTimer.start();
+            } catch (IllegalStateException | SecurityException ex) {
+                button.setToolTipText("Panoya kopyalanamadı");
+            }
+        });
+        return button;
+    }
     private JButton windowButton(String label, boolean isClose) {
         JButton button = new JButton(label);
         button.setFont(new Font("Segoe UI Symbol", Font.PLAIN, 17));
@@ -1502,11 +1532,36 @@ public final class AkachiLauncher {
         card.add(addressLabel, c);
 
         styleLabel(serverAddress, TEXT, 14, true);
+        JButton copyAddressButton = actionButton("Kopyala", false);
+        copyAddressButton.setFont(new Font("Segoe UI", Font.BOLD, 10));
+        copyAddressButton.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(58, 69, 84)),
+                new EmptyBorder(4, 8, 4, 8)));
+        copyAddressButton.setPreferredSize(new Dimension(70, 25));
+        copyAddressButton.setEnabled(!SERVER_HOST.isBlank());
+        copyAddressButton.setToolTipText("Sunucu adresini panoya kopyala");
+        copyAddressButton.addActionListener(e -> {
+            try {
+                Toolkit.getDefaultToolkit().getSystemClipboard()
+                        .setContents(new StringSelection(serverAddress.getText()), null);
+                copyAddressButton.setText("✓");
+                javax.swing.Timer resetTimer = new javax.swing.Timer(1200,
+                        event -> copyAddressButton.setText("Kopyala"));
+                resetTimer.setRepeats(false);
+                resetTimer.start();
+            } catch (IllegalStateException | SecurityException ex) {
+                copyAddressButton.setToolTipText("Panoya kopyalanamadı");
+            }
+        });
+        JPanel addressBlock = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        addressBlock.setOpaque(false);
+        addressBlock.add(serverAddress);
+        addressBlock.add(copyAddressButton);
         c.gridx = 1;
         c.gridy = 1;
         c.weightx = 1;
         c.insets = new Insets(17, 0, 0, 0);
-        card.add(serverAddress, c);
+        card.add(addressBlock, c);
 
         pingButton.setText("Durumu yenile");
         pingButton.setEnabled(!SERVER_HOST.isBlank());
