@@ -1,0 +1,10 @@
+launcher/build/
+*.class
+akachi-auth-mod/.gradle/
+akachi-auth-mod/build/
+akachi-auth-mod/run/
+akachi-auth-mod/run-data/
+akachi-auth-mod/.idea/
+
+launcher/runtime/
+launcher/dist/
