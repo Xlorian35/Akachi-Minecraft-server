@@ -7,7 +7,7 @@ Akachi sunucusu için launcher ve mod paketi deposu.
 1. Bilgisayarda JDK 21 kurulu olsun.
 2. `launcher/run.bat` dosyasına çift tıkla.
 3. **Oyunu kur ve aç** düğmesi Minecraft **1.20.1** istemcisini, Forge **47.4.26** profilini ve eksik oyun dosyalarını `%APPDATA%\Akachi Launcher\Minecraft` klasörüne indirip oyunu doğrudan başlatır.
-4. **Sunucu modlarını güncelle** düğmesi, bu depodaki `mods/` dosyalarını Minecraft klasöründeki `mods/` klasörüne eşitler.
+4. Oyuna girerken launcher, bu depodaki `mods/` dosyalarını otomatik olarak Minecraft klasöründeki `mods/` klasörüne eşitler. **Sunucu modlarını güncelle** düğmesiyle bunu ayrıca elle de başlatabilirsin.
 5. Mod Manager, texture pack ve shader pack bölümleri isteğe bağlı içerikleri ilgili klasörlere indirir.
 
 Oyun dosyaları ve modlar `%APPDATA%\Akachi Launcher` klasöründe tutulur. Launcher bu klasörü otomatik oluşturur; kurulum yeri seçmen gerekmez.
@@ -32,7 +32,7 @@ Launcher oyunu Forge istemcisi olarak doğrudan başlatır ve Minecraft oturum a
 
 ## Zorunlu sunucu modları
 
-Forge modlarının `.jar` dosyalarını deponun kökündeki `mods/` klasöründe tut. GitHub Desktop'tan değişiklikleri commit edip **Push origin** yaptığında launcher güncel listeyi görür. Launcher aynı içeriğe sahip yinelenen dosyaları bir kez indirir. Modları depoda yeniden dağıtmadan önce her modun lisansını ve yazarının dağıtım koşullarını kontrol et.
+Forge modlarının `.jar` dosyalarını deponun kökündeki `mods/` klasöründe tut. GitHub Desktop'tan değişiklikleri commit edip **Push origin** yaptığında launcher, oyuna girerken güncel listeyi görür ve eksik/değişmiş modları `Minecraft/mods/` içine indirir. Aynı içeriğe sahip yinelenen dosyalar bir kez indirilir. Modları depoda yeniden dağıtmadan önce her modun lisansını ve yazarının dağıtım koşullarını kontrol et.
 
 Minecraft sürümü: **1.20.1**  
 Mod yükleyici: **Forge**

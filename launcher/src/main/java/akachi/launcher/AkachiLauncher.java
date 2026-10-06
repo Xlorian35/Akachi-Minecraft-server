@@ -10,6 +10,7 @@ import javax.swing.JFrame;
 import javax.swing.ImageIcon;
 import javax.swing.JLabel;
 import javax.swing.JList;
+import javax.swing.JProgressBar;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JDialog;
@@ -80,6 +81,7 @@ import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -104,8 +106,8 @@ import static java.awt.GridBagConstraints.WEST;
 public final class AkachiLauncher {
     private static final String REPOSITORY = "Xlorian35/Akachi-Minecraft-server";
     private static final String BRANCH = "main";
-    private static final String LAUNCHER_VERSION = "V0.7";
-    private static final String UPDATE_BUILD = "V0.7.1";
+    private static final String LAUNCHER_VERSION = "V0.7.5";
+    private static final String UPDATE_BUILD = "V0.7.5";
     private static final String VERSION_URL = "https://raw.githubusercontent.com/" + REPOSITORY + "/" + BRANCH + "/launcher/version.txt";
     private static final String SETUP_DOWNLOAD_URL = "https://raw.githubusercontent.com/" + REPOSITORY + "/" + BRANCH + "/AkachiLauncherSetup.exe";
     private static final String MINECRAFT_VERSION = "1.20.1";
@@ -150,10 +152,11 @@ public final class AkachiLauncher {
     private final JLabel serverAddress = new JLabel(serverDisplay());
     private final JLabel serverStatus = new JLabel("Sunucu adresini gir", SwingConstants.RIGHT);
     private final JLabel playersStatus = new JLabel("", SwingConstants.RIGHT);
-    private final JLabel modStatus = new JLabel("GitHub deposundaki modlar hazır olduğunda buradan indir.");
+    private final JLabel modStatus = new JLabel("Gerekli modlar oyuna girerken otomatik eşitlenir.");
     private final JLabel footerStatus = new JLabel("Minecraft " + MINECRAFT_VERSION + " · Forge " + FORGE_VERSION);
+    private final JProgressBar downloadProgress = new JProgressBar(0, 100);
     private final JButton pingButton = actionButton("Sunucuyu kontrol et", false);
-    private final JButton syncButton = actionButton("GitHub'dan modları indir", false);
+    private final JButton syncButton = actionButton("Modları şimdi eşitle", false);
     private final JButton launchButton = actionButton("Oyunu kur ve aç", true);
     private final JButton updateButton = actionButton("Güncelle", false);
     private final JLabel authStatus = new JLabel("Supabase bağlantısı hazırlanıyor.");
@@ -1606,7 +1609,22 @@ public final class AkachiLauncher {
         footer.setOpaque(false);
         footerStatus.setFont(new Font("Segoe UI", Font.PLAIN, 11));
         footerStatus.setForeground(MUTED);
-        footer.add(footerStatus, BorderLayout.WEST);
+        JPanel statusPanel = new JPanel();
+        statusPanel.setOpaque(false);
+        statusPanel.setLayout(new BoxLayout(statusPanel, BoxLayout.Y_AXIS));
+        downloadProgress.setStringPainted(true);
+        downloadProgress.setString("0%");
+        downloadProgress.setFont(new Font("Segoe UI", Font.BOLD, 10));
+        downloadProgress.setForeground(new Color(238, 205, 208));
+        downloadProgress.setBackground(CARD_ALT);
+        downloadProgress.setBorderPainted(false);
+        downloadProgress.setPreferredSize(new Dimension(300, 16));
+        downloadProgress.setMaximumSize(new Dimension(300, 16));
+        downloadProgress.setVisible(false);
+        statusPanel.add(footerStatus);
+        statusPanel.add(Box.createVerticalStrut(5));
+        statusPanel.add(downloadProgress);
+        footer.add(statusPanel, BorderLayout.WEST);
         JLabel repository = new JLabel("GitHub  ·  " + REPOSITORY);
         repository.setFont(new Font("Segoe UI", Font.PLAIN, 11));
         repository.setForeground(MUTED);
@@ -2034,23 +2052,46 @@ public final class AkachiLauncher {
             return;
         }
         launchButton.setEnabled(false);
+        downloadProgress.setIndeterminate(true);
+        downloadProgress.setValue(0);
+        downloadProgress.setString("…");
+        downloadProgress.setVisible(true);
         footerStatus.setText("Forge " + MINECRAFT_VERSION + "-" + FORGE_VERSION + " kontrol ediliyor…");
         Path gameDirectory = MINECRAFT_DIRECTORY;
 
         String username = currentGameUsername;
         new SwingWorker<GameLaunchConfig, String>() {
             @Override protected GameLaunchConfig doInBackground() throws Exception {
+                publish("Depodaki zorunlu modlar kontrol ediliyor…");
+                int modCount = downloadRepositoryMods(gameDirectory.resolve("mods"), this::publish);
+                publish(modCount + " mod dosyası Minecraft klasörüne eşitlendi.");
                 ensureForgeInstalled(gameDirectory, this::publish);
                 return prepareDirectLaunch(gameDirectory, username, this::publish);
             }
 
             @Override protected void process(List<String> messages) {
-                if (!messages.isEmpty()) footerStatus.setText(messages.get(messages.size() - 1));
+                for (String message : messages) {
+                    if (message.startsWith("@PROGRESS:")) {
+                        String[] parts = message.split(":", 3);
+                        if (parts.length == 3) {
+                            try {
+                                int percent = Math.max(0, Math.min(100, Integer.parseInt(parts[1])));
+                                downloadProgress.setIndeterminate(false);
+                                downloadProgress.setValue(percent);
+                                downloadProgress.setString(percent + "%");
+                                footerStatus.setText(parts[2]);
+                            } catch (NumberFormatException ignored) { }
+                        }
+                    } else {
+                        footerStatus.setText(message);
+                    }
+                }
             }
 
             @Override protected void done() {
                 try {
                     GameLaunchConfig config = get();
+                    downloadProgress.setVisible(false);
                     updateLaunchButtonLabel();
                     Process game = new ProcessBuilder(config.command)
                             .directory(gameDirectory.toFile())
@@ -2074,6 +2115,7 @@ public final class AkachiLauncher {
                         });
                     });
                 } catch (Exception ex) {
+                    downloadProgress.setVisible(false);
                     launchButton.setEnabled(authenticated);
                     footerStatus.setText("Minecraft başlatılamadı");
                     showMessage("Minecraft " + MINECRAFT_VERSION + " başlatılamadı.\n\n"
@@ -2165,15 +2207,28 @@ public final class AkachiLauncher {
         Path nativesDirectory = gameDirectory.resolve("versions").resolve(FORGE_PROFILE).resolve("natives");
         extractWindowsNatives(librariesDirectory, nativesDirectory);
 
-        List<Path> classpathEntries = new ArrayList<>();
-        try (var paths = Files.walk(librariesDirectory)) {
-            paths.filter(Files::isRegularFile)
-                    .filter(path -> path.getFileName().toString().endsWith(".jar"))
-                    .filter(path -> !path.getFileName().toString().contains("natives-"))
-                    .sorted()
-                    .forEach(classpathEntries::add);
+        LinkedHashSet<Path> classpathEntrySet = new LinkedHashSet<>();
+        addLibraryArtifacts(classpathEntrySet, list(vanilla, "libraries"), librariesDirectory);
+        addLibraryArtifacts(classpathEntrySet, list(forge, "libraries"), librariesDirectory);
+        String forgeArtifactVersion = MINECRAFT_VERSION + "-" + FORGE_VERSION;
+        Path forgeClientJar = librariesDirectory.resolve("net/minecraftforge/forge/")
+                .resolve(forgeArtifactVersion).resolve("forge-" + forgeArtifactVersion + "-client.jar");
+        if (Files.isRegularFile(forgeClientJar)) classpathEntrySet.add(forgeClientJar);
+        List<Path> classpathEntries = new ArrayList<>(classpathEntrySet);
+        Path minecraftClientLibraries = librariesDirectory.resolve("net/minecraft/client");
+        boolean transformedForgeClientPresent = false;
+        if (Files.isDirectory(minecraftClientLibraries)) {
+            try (var paths = Files.walk(minecraftClientLibraries)) {
+                transformedForgeClientPresent = paths.filter(Files::isRegularFile)
+                        .anyMatch(path -> path.getFileName().toString().matches(
+                                "client-" + java.util.regex.Pattern.quote(MINECRAFT_VERSION)
+                                        + "-[^-]+-srg\\.jar"));
+            }
         }
-        classpathEntries.add(clientJar);
+        // Forge installs a remapped client-srg jar beside the normal Minecraft client.
+        // Forge discovers that jar itself; adding the vanilla jar here creates two
+        // modules containing the same net.minecraft packages and aborts startup.
+        if (!transformedForgeClientPresent) classpathEntries.add(clientJar);
         String classpath = classpathEntries.stream().map(Path::toString)
                 .collect(java.util.stream.Collectors.joining(java.io.File.pathSeparator));
 
@@ -2200,7 +2255,16 @@ public final class AkachiLauncher {
                 "${classpath}", classpath,
                 "${launcher_name}", "AkachiLauncher",
                 "${launcher_version}", LAUNCHER_VERSION);
-        for (String argument : jvmArguments) command.add(expandArgument(argument, substitutions));
+        for (String argument : jvmArguments) {
+            String expanded = expandArgument(argument, substitutions);
+            // Forge's installer leaves these build-time-only jars in the shared
+            // libraries directory. BootstrapLauncher otherwise treats them as
+            // runtime modules, where FART's bundled ASM conflicts with Forge's ASM.
+            if (expanded.startsWith("-DignoreList=")) {
+                expanded += ",ForgeAutoRenamingTool,animal-sniffer-annotations";
+            }
+            command.add(expanded);
+        }
         command.add("-cp");
         command.add(classpath);
         command.add(string(forge, "mainClass"));
@@ -2278,6 +2342,19 @@ public final class AkachiLauncher {
         }
     }
 
+    private static void addLibraryArtifacts(Set<Path> classpath, List<Object> libraries, Path root)
+            throws IOException {
+        for (Object value : libraries) {
+            Map<String, Object> library = asObject(value);
+            if (!libraryAllowedOnWindows(library)) continue;
+            Map<String, Object> artifact = object(object(library, "downloads"), "artifact");
+            String relativePath = string(artifact, "path");
+            if (relativePath.isBlank()) continue;
+            Path jar = safeChild(root, relativePath);
+            if (Files.isRegularFile(jar)) classpath.add(jar);
+        }
+    }
+
     private void downloadAssets(Path indexFile, Path assetsDirectory,
                                 java.util.function.Consumer<String> progress) throws Exception {
         Map<String, Object> index = readJsonObject(indexFile);
@@ -2289,6 +2366,8 @@ public final class AkachiLauncher {
             return thread;
         });
         AtomicInteger completed = new AtomicInteger();
+        int totalAssets = Math.max(1, objects.size());
+        progress.accept("@PROGRESS:0:Minecraft dosyaları hazırlanıyor…");
         try {
             for (Object value : objects.values()) {
                 Map<String, Object> asset = asObject(value);
@@ -2297,7 +2376,9 @@ public final class AkachiLauncher {
                 Path destination = assetsDirectory.resolve("objects").resolve(hash.substring(0, 2)).resolve(hash);
                 long size = number(asset, "size");
                 if (Files.isRegularFile(destination) && Files.size(destination) == size) {
-                    completed.incrementAndGet();
+                    int count = completed.incrementAndGet();
+                    progress.accept("@PROGRESS:" + (count * 100 / totalAssets)
+                            + ":Minecraft dosyaları denetleniyor…");
                     continue;
                 }
                 pending.add(executor.submit(() -> {
@@ -2305,7 +2386,8 @@ public final class AkachiLauncher {
                         downloadVerified("https://resources.download.minecraft.net/" + hash.substring(0, 2) + "/" + hash,
                                 destination, hash, size, progress, "Minecraft dosyaları indiriliyor…");
                         int count = completed.incrementAndGet();
-                        if (count % 100 == 0) progress.accept("Minecraft dosyaları indiriliyor · " + count + "/" + objects.size());
+                        progress.accept("@PROGRESS:" + (count * 100 / totalAssets)
+                                + ":Minecraft dosyaları indiriliyor · " + count + "/" + objects.size());
                     } catch (Exception ex) {
                         throw new java.util.concurrent.CompletionException(ex);
                     }
@@ -2315,6 +2397,7 @@ public final class AkachiLauncher {
         } finally {
             executor.shutdownNow();
         }
+        progress.accept("@PROGRESS:100:Minecraft dosyaları hazır.");
         progress.accept("Minecraft kaynak dosyaları hazır.");
     }
 
