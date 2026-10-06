@@ -46,7 +46,13 @@ final class AuthService {
     }
 
     static void verify(ServerPlayer player, String token) {
-        if (token == null || token.isBlank() || token.length() > 8192 || !PENDING.contains(player.getUUID())) {
+        UUID playerId = player.getUUID();
+        if (!PENDING.contains(playerId)) return;
+
+        if (token == null || token.isBlank() || token.length() > 8192) {
+            if (PENDING.remove(playerId)) {
+                disconnect(player, "Akachi Launcher oturumu bulunamadı. Oyunu Akachi Launcher üzerinden başlat.");
+            }
             return;
         }
         CompletableFuture.runAsync(() -> {

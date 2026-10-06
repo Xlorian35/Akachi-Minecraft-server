@@ -18,14 +18,16 @@ public final class AuthClient {
 
     @SubscribeEvent
     public static void onLoggingIn(ClientPlayerNetworkEvent.LoggingIn event) {
+        String token = "";
         try {
             Path authFile = FMLPaths.GAMEDIR.get().resolve("akachi-auth.json");
-            if (!Files.isRegularFile(authFile)) return;
-            JsonObject auth = JsonParser.parseString(Files.readString(authFile, StandardCharsets.UTF_8)).getAsJsonObject();
-            String token = auth.has("access_token") ? auth.get("access_token").getAsString() : "";
-            if (!token.isBlank()) AkachiAuth.CHANNEL.sendToServer(new AuthPacket(token));
+            if (Files.isRegularFile(authFile)) {
+                JsonObject auth = JsonParser.parseString(Files.readString(authFile, StandardCharsets.UTF_8)).getAsJsonObject();
+                token = auth.has("access_token") ? auth.get("access_token").getAsString() : "";
+            }
         } catch (Exception ignored) {
-            // The server will time out and show the regular Akachi sign-in message.
+            // Send an empty token so the server rejects this connection immediately.
         }
+        AkachiAuth.CHANNEL.sendToServer(new AuthPacket(token));
     }
 }
