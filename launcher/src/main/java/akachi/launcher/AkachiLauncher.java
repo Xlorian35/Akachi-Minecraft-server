@@ -106,8 +106,8 @@ import static java.awt.GridBagConstraints.WEST;
 public final class AkachiLauncher {
     private static final String REPOSITORY = "Xlorian35/Akachi-Minecraft-server";
     private static final String BRANCH = "main";
-    private static final String LAUNCHER_VERSION = "V0.7.5";
-    private static final String UPDATE_BUILD = "V0.7.5";
+    private static final String LAUNCHER_VERSION = "V0.7.7";
+    private static final String UPDATE_BUILD = "V0.7.7";
     private static final String VERSION_URL = "https://raw.githubusercontent.com/" + REPOSITORY + "/" + BRANCH + "/launcher/version.txt";
     private static final String SETUP_DOWNLOAD_URL = "https://raw.githubusercontent.com/" + REPOSITORY + "/" + BRANCH + "/AkachiLauncherSetup.exe";
     private static final String MINECRAFT_VERSION = "1.20.1";
@@ -152,7 +152,7 @@ public final class AkachiLauncher {
     private final JLabel serverAddress = new JLabel(serverDisplay());
     private final JLabel serverStatus = new JLabel("Sunucu adresini gir", SwingConstants.RIGHT);
     private final JLabel playersStatus = new JLabel("", SwingConstants.RIGHT);
-    private final JLabel modStatus = new JLabel("Gerekli modlar oyuna girerken otomatik eşitlenir.");
+    private final JLabel modStatus = new JLabel("Gerekli modlar ve grafik bileşenleri oyuna girerken otomatik eşitlenir.");
     private final JLabel footerStatus = new JLabel("Minecraft " + MINECRAFT_VERSION + " · Forge " + FORGE_VERSION);
     private final JProgressBar downloadProgress = new JProgressBar(0, 100);
     private final JButton pingButton = actionButton("Sunucuyu kontrol et", false);
@@ -1855,7 +1855,9 @@ public final class AkachiLauncher {
         modStatus.setText("GitHub deposu kontrol ediliyor…");
         new SwingWorker<Integer, String>() {
             @Override protected Integer doInBackground() throws Exception {
-                return downloadRepositoryMods(destination, this::publish);
+                int count = downloadRepositoryMods(destination, this::publish);
+                disableOptiFine(destination, this::publish);
+                return count;
             }
 
             @Override protected void process(List<String> messages) {
@@ -1892,7 +1894,9 @@ public final class AkachiLauncher {
         }
 
         List<RemoteFile> files = parseRepositoryFiles(response.body());
-        if (files.isEmpty()) throw new IOException("GitHub'da indirilebilir .jar modu bulunamadı.");
+        if (files.isEmpty()) {
+            throw new IOException("GitHub'da indirilebilir .jar modu bulunamadı.");
+        }
         Files.createDirectories(destination);
         int index = 0;
         for (RemoteFile file : files) {
@@ -1929,6 +1933,21 @@ public final class AkachiLauncher {
             }
         }
         return files.size();
+    }
+
+    private void disableOptiFine(Path modsDirectory, java.util.function.Consumer<String> progress) throws IOException {
+        if (!Files.isDirectory(modsDirectory)) return;
+        try (var files = Files.newDirectoryStream(modsDirectory, "OptiFine*.jar")) {
+            for (Path optiFine : files) {
+                Path backup = optiFine.resolveSibling(optiFine.getFileName() + ".disabled");
+                int suffix = 1;
+                while (Files.exists(backup)) {
+                    backup = optiFine.resolveSibling(optiFine.getFileName() + ".disabled-" + suffix++);
+                }
+                Files.move(optiFine, backup);
+                progress.accept("OptiFine/Posture çakışması önlendi; yedek: " + backup.getFileName());
+            }
+        }
     }
 
     private List<RemoteAsset> fetchRemoteAssets(String folder, String extension) throws Exception {
@@ -2064,6 +2083,7 @@ public final class AkachiLauncher {
             @Override protected GameLaunchConfig doInBackground() throws Exception {
                 publish("Depodaki zorunlu modlar kontrol ediliyor…");
                 int modCount = downloadRepositoryMods(gameDirectory.resolve("mods"), this::publish);
+                disableOptiFine(gameDirectory.resolve("mods"), this::publish);
                 publish(modCount + " mod dosyası Minecraft klasörüne eşitlendi.");
                 ensureForgeInstalled(gameDirectory, this::publish);
                 return prepareDirectLaunch(gameDirectory, username, this::publish);
