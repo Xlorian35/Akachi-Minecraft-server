@@ -38,6 +38,12 @@ Forge modlarının `.jar` dosyalarını deponun kökündeki `mods/` klasöründe
 Minecraft sürümü: **1.20.1**  
 Mod yükleyici: **Forge**
 
+## Launcher güncellemeleri
+
+Launcher açılışta `launcher/version.txt` sürümünü kontrol eder. Yeni sürüm varsa alt çubukta **Güncelleme var** düğmesi görünür. Düğme güncel `AkachiLauncherSetup.exe` dosyasını indirip kurulum onayını açar; kurulum tamamlanınca launcher yeniden başlar.
+
+Yeni launcher sürümü yayımlarken `AkachiLauncher.java` içindeki `LAUNCHER_VERSION` ve `launcher/version.txt` değerlerini birlikte artır, yeni `AkachiLauncherSetup.exe` dosyasını depo köküne koyup üçünü GitHub'a gönder. İlk güncelleme sistemini içeren setup'ı oyuncuların bir kez elle kurması gerekir; sonraki sürümlerde launcher güncellemeyi kendisi bulur.
+
 ## İsteğe bağlı içerikler
 
 - Forge modları: `optional-mods/` içine `.jar`

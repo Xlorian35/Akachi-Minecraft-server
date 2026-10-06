@@ -68,10 +68,15 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.AclEntry;
+import java.nio.file.attribute.AclEntryPermission;
+import java.nio.file.attribute.AclEntryType;
+import java.nio.file.attribute.AclFileAttributeView;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -92,6 +97,9 @@ import static java.awt.GridBagConstraints.WEST;
 public final class AkachiLauncher {
     private static final String REPOSITORY = "Xlorian35/Akachi-Minecraft-server";
     private static final String BRANCH = "main";
+    private static final String LAUNCHER_VERSION = "V0.5";
+    private static final String VERSION_URL = "https://raw.githubusercontent.com/" + REPOSITORY + "/" + BRANCH + "/launcher/version.txt";
+    private static final String SETUP_DOWNLOAD_URL = "https://raw.githubusercontent.com/" + REPOSITORY + "/" + BRANCH + "/AkachiLauncherSetup.exe";
     private static final String MINECRAFT_VERSION = "1.20.1";
     private static final String FORGE_VERSION = "47.4.26";
     private static final String FORGE_PROFILE = MINECRAFT_VERSION + "-forge-" + FORGE_VERSION;
@@ -138,7 +146,8 @@ public final class AkachiLauncher {
     private final JLabel footerStatus = new JLabel("Minecraft " + MINECRAFT_VERSION + " · Forge " + FORGE_VERSION);
     private final JButton pingButton = actionButton("Sunucuyu kontrol et", false);
     private final JButton syncButton = actionButton("GitHub'dan modları indir", false);
-    private final JButton launchButton = actionButton("SÜRÜMÜ KUR VE AÇ", true);
+    private final JButton launchButton = actionButton("Oyunu kur ve aç", true);
+    private final JButton updateButton = actionButton("Güncelle", false);
     private final JLabel authStatus = new JLabel("Supabase bağlantısı hazırlanıyor.");
     private final JTextField authUsername = new JTextField();
     private final JTextField authEmail = new JTextField();
@@ -168,13 +177,16 @@ public final class AkachiLauncher {
         } catch (IOException ex) {
             footerStatus.setText("Akachi klasörü oluşturulamadı: " + ex.getMessage());
         }
+        updateLaunchButtonLabel();
         loadSettings();
         refreshAuthCard();
         launchButton.setEnabled(false);
         buildWindow();
+        if (!PREVIEW_MODE) restoreSavedSession();
         if (!PREVIEW_MODE && !SERVER_HOST.isBlank()) {
             checkServer();
         }
+        if (!PREVIEW_MODE) checkForLauncherUpdate();
     }
 
     public static void main(String[] args) {
@@ -233,6 +245,16 @@ public final class AkachiLauncher {
         styleLabel(graphicsHelp, MUTED, 11, false);
         graphicsHelp.setAlignmentX(Component.LEFT_ALIGNMENT);
 
+        JPanel updateRow = new JPanel(new BorderLayout(12, 0));
+        updateRow.setOpaque(false);
+        updateRow.setBorder(new EmptyBorder(22, 0, 8, 0));
+        JButton checkUpdates = actionButton("Güncellemeleri denetle", false);
+        JLabel updateStatus = new JLabel("Sürüm " + LAUNCHER_VERSION);
+        styleLabel(updateStatus, MUTED, 11, false);
+        checkUpdates.addActionListener(e -> checkForLauncherUpdate(updateStatus, checkUpdates));
+        updateRow.add(checkUpdates, BorderLayout.WEST);
+        updateRow.add(updateStatus, BorderLayout.CENTER);
+
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         buttons.setOpaque(false);
         buttons.setBorder(new EmptyBorder(22, 0, 0, 0));
@@ -257,6 +279,39 @@ public final class AkachiLauncher {
         buttons.add(cancel);
         buttons.add(save);
 
+        JPanel uninstallSection = new JPanel();
+        uninstallSection.setOpaque(false);
+        uninstallSection.setLayout(new BoxLayout(uninstallSection, BoxLayout.Y_AXIS));
+        uninstallSection.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(1, 0, 0, 0, new Color(73, 44, 50)),
+                new EmptyBorder(18, 0, 0, 0)));
+        JLabel uninstallTitle = new JLabel("UYGULAMAYI KALDIR");
+        styleLabel(uninstallTitle, RED, 11, true);
+        uninstallTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel uninstallHint = new JLabel("Launcher ve oturum dosyaları silinir; Minecraft klasörün korunur.");
+        styleLabel(uninstallHint, MUTED, 11, false);
+        uninstallHint.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JCheckBox deleteMinecraft = new JCheckBox("Minecraft dosyalarını ve dünyaları da sil");
+        deleteMinecraft.setOpaque(false);
+        deleteMinecraft.setForeground(TEXT);
+        deleteMinecraft.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+        deleteMinecraft.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JButton uninstall = actionButton("Uygulamayı kökten sil", true);
+        uninstall.setForeground(Color.WHITE);
+        uninstall.setBackground(new Color(132, 34, 46));
+        uninstall.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(161, 43, 57)), new EmptyBorder(9, 14, 9, 14)));
+        uninstall.setAlignmentX(Component.LEFT_ALIGNMENT);
+        uninstall.addActionListener(e -> confirmAndUninstall(deleteMinecraft.isSelected(), dialog));
+        uninstallSection.add(uninstallTitle);
+        uninstallSection.add(Box.createVerticalStrut(5));
+        uninstallSection.add(uninstallHint);
+        uninstallSection.add(Box.createVerticalStrut(4));
+        uninstallSection.add(deleteMinecraft);
+        uninstallSection.add(Box.createVerticalStrut(7));
+        uninstallSection.add(uninstall);
+        uninstallSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+
         content.add(title);
         content.add(Box.createVerticalStrut(5));
         content.add(subtitle);
@@ -264,12 +319,85 @@ public final class AkachiLauncher {
         content.add(ramHelp);
         content.add(graphicsRow);
         content.add(graphicsHelp);
+        content.add(updateRow);
         content.add(buttons);
+        content.add(Box.createVerticalStrut(18));
+        content.add(uninstallSection);
         dialog.setContentPane(content);
         dialog.pack();
         dialog.setMinimumSize(new Dimension(470, dialog.getHeight()));
         dialog.setLocationRelativeTo(frame);
         dialog.setVisible(true);
+    }
+
+    private void confirmAndUninstall(boolean removeMinecraftData, JDialog settingsDialog) {
+        String details = removeMinecraftData
+                ? "Akachi Launcher, kayıtlı oturumun ve Minecraft klasöründeki oyun dosyaları, modlar ve dünyalar kalıcı olarak silinecek. Bu işlem geri alınamaz."
+                : "Akachi Launcher ve kayıtlı oturum dosyaları kaldırılacak. Minecraft oyun dosyaların ve dünyaların korunacak.";
+        int choice = JOptionPane.showConfirmDialog(settingsDialog, details,
+                "Akachi Launcher'ı kaldır", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (choice != JOptionPane.YES_OPTION) return;
+
+        if (removeMinecraftData) {
+            int finalChoice = JOptionPane.showConfirmDialog(settingsDialog,
+                    "Minecraft klasöründeki dünyalar da silinecek. Gerçekten devam edilsin mi?",
+                    "Minecraft verilerini de sil", JOptionPane.YES_NO_OPTION, JOptionPane.ERROR_MESSAGE);
+            if (finalChoice != JOptionPane.YES_OPTION) return;
+        }
+
+        try {
+            Path appRoot = AKACHI_DIRECTORY.toAbsolutePath().normalize();
+            Path expectedRoot = appDataDirectory().toAbsolutePath().normalize();
+            Path launcherDirectory = appRoot.resolve("Launcher").normalize();
+            Path minecraftDirectory = appRoot.resolve("Minecraft").normalize();
+            if (!appRoot.equals(expectedRoot)
+                    || !launcherDirectory.getParent().equals(appRoot)
+                    || !minecraftDirectory.getParent().equals(appRoot)
+                    || Files.isSymbolicLink(appRoot)
+                    || Files.isSymbolicLink(launcherDirectory)
+                    || Files.isSymbolicLink(minecraftDirectory)) {
+                throw new IOException("Uygulama klasörü doğrulanamadı; hiçbir dosya silinmedi.");
+            }
+
+            String appData = System.getenv("APPDATA");
+            Path startMenu = (appData == null ? Path.of(System.getProperty("user.home"), "AppData", "Roaming") : Path.of(appData))
+                    .resolve("Microsoft").resolve("Windows").resolve("Start Menu").resolve("Programs")
+                    .resolve("Akachi Launcher.lnk");
+            Path scriptPath = Path.of(System.getProperty("java.io.tmpdir"),
+                    "akachi-uninstall-" + java.util.UUID.randomUUID() + ".ps1");
+            String script = "$ErrorActionPreference = 'Stop'\n"
+                    + "$launcherProcessId = " + ProcessHandle.current().pid() + "\n"
+                    + "$appRoot = [IO.Path]::GetFullPath(" + powershellLiteral(appRoot.toString()) + ")\n"
+                    + "$launcherDir = [IO.Path]::GetFullPath(" + powershellLiteral(launcherDirectory.toString()) + ")\n"
+                    + "$gameDir = [IO.Path]::GetFullPath(" + powershellLiteral(minecraftDirectory.toString()) + ")\n"
+                    + "$expectedRoot = [IO.Path]::GetFullPath((Join-Path $env:APPDATA 'Akachi Launcher'))\n"
+                    + "if (![string]::Equals($appRoot.TrimEnd([char]92), $expectedRoot.TrimEnd([char]92), [StringComparison]::OrdinalIgnoreCase)) { exit 2 }\n"
+                    + "if (![string]::Equals([IO.Path]::GetDirectoryName($launcherDir), $appRoot, [StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetFileName($launcherDir) -ne 'Launcher') { exit 3 }\n"
+                    + "if (![string]::Equals([IO.Path]::GetDirectoryName($gameDir), $appRoot, [StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetFileName($gameDir) -ne 'Minecraft') { exit 4 }\n"
+                    + "Wait-Process -Id $launcherProcessId -ErrorAction SilentlyContinue\n"
+                    + "$desktopDir = [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)\n"
+                    + "$shortcuts = @(" + powershellLiteral(startMenu.toString()) + ", (Join-Path $desktopDir 'Akachi Launcher.lnk'))\n"
+                    + "foreach ($shortcut in $shortcuts) { if (Test-Path -LiteralPath $shortcut) { Remove-Item -LiteralPath $shortcut -Force } }\n"
+                    + "if (Test-Path -LiteralPath $launcherDir) { Remove-Item -LiteralPath $launcherDir -Recurse -Force }\n"
+                    + (removeMinecraftData
+                    ? "if (Test-Path -LiteralPath $gameDir) { Remove-Item -LiteralPath $gameDir -Recurse -Force }\n"
+                    : "$authFile = Join-Path $gameDir 'akachi-auth.json'; if (Test-Path -LiteralPath $authFile) { Remove-Item -LiteralPath $authFile -Force }\n")
+                    + "if ((Test-Path -LiteralPath $appRoot) -and @(Get-ChildItem -LiteralPath $appRoot -Force).Count -eq 0) { Remove-Item -LiteralPath $appRoot -Force }\n"
+                    + "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue\n";
+            Files.writeString(scriptPath, script, StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+            new ProcessBuilder("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-WindowStyle", "Hidden", "-File", scriptPath.toString()).start();
+            settingsDialog.dispose();
+            frame.dispose();
+            System.exit(0);
+        } catch (IOException ex) {
+            showMessage("Launcher kaldırılamadı.\n\n" + ex.getMessage());
+        }
+    }
+
+    private static String powershellLiteral(String value) {
+        return "'" + value.replace("'", "''") + "'";
     }
 
     private void loadSettings() {
@@ -487,45 +615,37 @@ public final class AkachiLauncher {
         JPanel sections = new JPanel();
         sections.setOpaque(false);
         sections.setLayout(new BoxLayout(sections, BoxLayout.Y_AXIS));
-        JPanel topRow = new JPanel(new GridBagLayout());
-        topRow.setOpaque(false);
-        GridBagConstraints topCell = new GridBagConstraints();
-        topCell.gridy = 0;
-        topCell.weightx = 0.5;
-        topCell.fill = GridBagConstraints.HORIZONTAL;
-        topCell.anchor = GridBagConstraints.NORTHWEST;
-        topCell.insets = new Insets(0, 0, 0, 8);
-        topRow.add(buildAssetSection("TEXTURE PACK", "İstediğin kaynak paketlerini indir; oyunda Kaynak Paketleri menüsünden etkinleştir.", resourcePackAssets), topCell);
-        topCell.gridx = 1;
-        topCell.insets = new Insets(0, 8, 0, 0);
-        topRow.add(buildAuthCard(), topCell);
-        topRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        sections.add(topRow);
-        sections.add(Box.createVerticalStrut(26));
+        JPanel columns = new JPanel(new GridBagLayout());
+        columns.setOpaque(false);
 
-        JPanel cards = new JPanel(new GridBagLayout());
-        cards.setOpaque(false);
-        GridBagConstraints cell = new GridBagConstraints();
-        // Keep mods and shaders down the left; put the game version in the
-        // open lower-right area. Server details live in the header.
-        cell.weightx = 0.5;
-        cell.anchor = GridBagConstraints.NORTHWEST;
-        cell.fill = GridBagConstraints.HORIZONTAL;
-        cell.gridx = 0;
-        cell.gridy = 0;
-        cell.insets = new Insets(0, 0, 14, 8);
-        cards.add(buildOptionalModsCard(), cell);
-        cell.gridx = 0;
-        cell.gridy = 1;
-        cell.insets = new Insets(0, 0, 14, 8);
-        cards.add(buildAssetSection("SHADER PACK", "Shader arşivlerini indir. Forge 1.20.1'de kullanmak için Oculus gibi uyumlu bir mod gerekir.", shaderPackAssets), cell);
-        cell.gridx = 1;
-        cell.fill = GridBagConstraints.NONE;
-        cell.anchor = GridBagConstraints.NORTHEAST;
-        cell.insets = new Insets(22, 8, 14, 24);
-        cards.add(buildGameCard(), cell);
-        cards.setAlignmentX(Component.LEFT_ALIGNMENT);
-        sections.add(cards);
+        JPanel leftColumn = new JPanel();
+        leftColumn.setOpaque(false);
+        leftColumn.setLayout(new BoxLayout(leftColumn, BoxLayout.Y_AXIS));
+        leftColumn.add(buildAssetSection("TEXTURE PACK", "İstediğin kaynak paketlerini indir; oyunda Kaynak Paketleri menüsünden etkinleştir.", resourcePackAssets));
+        leftColumn.add(Box.createVerticalStrut(16));
+        leftColumn.add(buildOptionalModsCard());
+        leftColumn.add(Box.createVerticalStrut(16));
+        leftColumn.add(buildAssetSection("SHADER PACK", "Shader arşivlerini indir. Forge 1.20.1'de kullanmak için Oculus gibi uyumlu bir mod gerekir.", shaderPackAssets));
+        leftColumn.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JPanel rightColumn = new JPanel();
+        rightColumn.setOpaque(false);
+        rightColumn.setLayout(new BoxLayout(rightColumn, BoxLayout.Y_AXIS));
+        rightColumn.add(buildAuthCard());
+        rightColumn.add(Box.createVerticalStrut(16));
+        rightColumn.add(buildGameCard());
+        rightColumn.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        GridBagConstraints leftCell = new GridBagConstraints(0, 0, 1, 1, 0.54, 1,
+                GridBagConstraints.NORTHWEST, GridBagConstraints.HORIZONTAL,
+                new Insets(0, 0, 0, 10), 0, 0);
+        GridBagConstraints rightCell = new GridBagConstraints(1, 0, 1, 1, 0.46, 1,
+                GridBagConstraints.NORTHWEST, GridBagConstraints.HORIZONTAL,
+                new Insets(0, 10, 0, 0), 0, 0);
+        columns.add(leftColumn, leftCell);
+        columns.add(rightColumn, rightCell);
+        columns.setAlignmentX(Component.LEFT_ALIGNMENT);
+        sections.add(columns);
         sections.add(Box.createVerticalStrut(8));
 
         JScrollPane body = new JScrollPane(sections, JScrollPane.VERTICAL_SCROLLBAR_NEVER, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
@@ -561,6 +681,8 @@ public final class AkachiLauncher {
             currentGameUsername = "";
             try { Files.deleteIfExists(authFilePath()); }
             catch (IOException ignored) { }
+            try { Files.deleteIfExists(sessionFilePath()); }
+            catch (IOException ignored) { }
             launchButton.setEnabled(false);
             footerStatus.setText("Önce Akachi hesabınla giriş yap.");
             refreshAuthCard();
@@ -587,7 +709,7 @@ public final class AkachiLauncher {
             account.setAlignmentX(Component.LEFT_ALIGNMENT);
             authCard.add(account);
             authCard.add(Box.createVerticalStrut(10));
-            authStatus.setText(signedInEmail + " · Minecraft adı hesaba bağlandı");
+            authStatus.setText(maskEmail(signedInEmail) + " · Minecraft adı hesaba bağlandı");
             styleLabel(authStatus, GREEN, 11, false);
             authStatus.setAlignmentX(Component.LEFT_ALIGNMENT);
             authCard.add(authStatus);
@@ -734,6 +856,12 @@ public final class AkachiLauncher {
             setAuthBusy(false, "Oturum bilgisi alınamadı. Tekrar giriş yap.");
             return;
         }
+        try {
+            persistAuthSession(result);
+        } catch (IOException ex) {
+            setAuthBusy(false, "Oturum bu bilgisayarda hatırlanamadı: " + ex.getMessage());
+            return;
+        }
         setAuthBusy(true, "Minecraft kullanıcı adın kontrol ediliyor…");
         new SwingWorker<String, Void>() {
             @Override protected String doInBackground() throws Exception {
@@ -756,17 +884,126 @@ public final class AkachiLauncher {
     }
 
     private void promptForMinecraftUsername(AuthResult result, String suggestedUsername) {
-        String username = JOptionPane.showInputDialog(frame,
-                "Bu Akachi hesabına bağlanacak Minecraft oyun adını seç.\n3–16 harf, rakam veya _ kullan.",
-                suggestedUsername.isBlank() ? "Minecraft oyun adı" : suggestedUsername);
+        JDialog dialog = new JDialog(frame, "Minecraft adını bağla", true);
+        dialog.setUndecorated(true);
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+
+        JPanel surface = new JPanel(new BorderLayout()) {
+            @Override protected void paintComponent(Graphics graphics) {
+                Graphics2D g = (Graphics2D) graphics.create();
+                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g.setColor(BACKGROUND);
+                g.fillRoundRect(0, 0, getWidth(), getHeight(), 18, 18);
+                g.setColor(new Color(166, 94, 105, 100));
+                g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 18, 18);
+                g.dispose();
+                super.paintComponent(graphics);
+            }
+        };
+        surface.setOpaque(false);
+        surface.setBorder(new EmptyBorder(1, 1, 1, 1));
+
+        JPanel header = new JPanel(new BorderLayout());
+        header.setOpaque(false);
+        header.setBorder(new EmptyBorder(12, 17, 12, 12));
+        JPanel brand = new JPanel(new FlowLayout(FlowLayout.LEFT, 9, 0));
+        brand.setOpaque(false);
+        Image logo = loadBrandImage(28);
+        if (logo != null) brand.add(new JLabel(new ImageIcon(logo)));
+        JLabel brandName = new JLabel("Akachi Launcher");
+        styleLabel(brandName, TEXT, 13, true);
+        brand.add(brandName);
+        JButton close = new JButton("×");
+        close.setFont(new Font("Segoe UI", Font.PLAIN, 20));
+        close.setForeground(MUTED);
+        close.setContentAreaFilled(false);
+        close.setBorder(BorderFactory.createEmptyBorder(0, 8, 2, 4));
+        close.setFocusPainted(false);
+        close.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        close.addActionListener(e -> dialog.dispose());
+        header.add(brand, BorderLayout.CENTER);
+        header.add(close, BorderLayout.EAST);
+
+        JPanel content = new JPanel();
+        content.setOpaque(false);
+        content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+        content.setBorder(new EmptyBorder(10, 25, 23, 25));
+        JLabel eyebrow = new JLabel("HESAP KURULUMU  ·  1 / 1");
+        styleLabel(eyebrow, GREEN, 10, true);
+        eyebrow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel title = new JLabel("Minecraft adını bağla");
+        styleLabel(title, TEXT, 21, true);
+        title.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel description = new JLabel("Bu ad Akachi hesabınla eşleşecek ve sunucu girişinde kullanılacak.");
+        styleLabel(description, MUTED, 12, false);
+        description.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel fieldLabel = new JLabel("MINECRAFT OYUN ADI");
+        styleLabel(fieldLabel, TEXT, 10, true);
+        fieldLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JTextField usernameField = new JTextField(suggestedUsername);
+        usernameField.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+        styleInput(usernameField);
+        usernameField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 42));
+        usernameField.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel hint = new JLabel("3–16 karakter · İngilizce harf, rakam veya alt çizgi");
+        styleLabel(hint, MUTED, 11, false);
+        hint.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel error = new JLabel(" ");
+        styleLabel(error, RED, 11, false);
+        error.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        buttons.setOpaque(false);
+        JButton cancel = actionButton("Daha sonra", false);
+        JButton confirm = actionButton("Adı bağla", true);
+        buttons.add(cancel);
+        buttons.add(confirm);
+        buttons.setMaximumSize(new Dimension(Integer.MAX_VALUE, buttons.getPreferredSize().height));
+        buttons.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        content.add(eyebrow);
+        content.add(Box.createVerticalStrut(8));
+        content.add(title);
+        content.add(Box.createVerticalStrut(6));
+        content.add(description);
+        content.add(Box.createVerticalStrut(22));
+        content.add(fieldLabel);
+        content.add(Box.createVerticalStrut(7));
+        content.add(usernameField);
+        content.add(Box.createVerticalStrut(7));
+        content.add(hint);
+        content.add(Box.createVerticalStrut(2));
+        content.add(error);
+        content.add(Box.createVerticalStrut(12));
+        content.add(buttons);
+        surface.add(header, BorderLayout.NORTH);
+        surface.add(content, BorderLayout.CENTER);
+        dialog.setContentPane(surface);
+        dialog.setSize(510, 330);
+        dialog.setLocationRelativeTo(frame);
+
+        final String[] chosenUsername = {null};
+        Runnable submit = () -> {
+            String value = usernameField.getText().trim();
+            if (!validGameUsername(value)) {
+                error.setText("Geçerli bir oyun adı gir: 3–16 harf, rakam veya _.");
+                usernameField.requestFocusInWindow();
+                return;
+            }
+            chosenUsername[0] = value;
+            dialog.dispose();
+        };
+        confirm.addActionListener(e -> submit.run());
+        usernameField.addActionListener(e -> submit.run());
+        cancel.addActionListener(e -> dialog.dispose());
+        dialog.getRootPane().setDefaultButton(confirm);
+        usernameField.selectAll();
+        SwingUtilities.invokeLater(usernameField::requestFocusInWindow);
+        dialog.setVisible(true);
+
+        String username = chosenUsername[0];
         if (username == null) {
             setAuthBusy(false, "Sunucuya girmek için Minecraft oyun adını bağlamalısın.");
-            return;
-        }
-        username = username.trim();
-        if (!validGameUsername(username)) {
-            setAuthBusy(false, "Oyun adı geçersiz. 3–16 harf, rakam veya _ kullan.");
-            promptForMinecraftUsername(result, suggestedUsername);
             return;
         }
         String selectedUsername = username;
@@ -821,6 +1058,7 @@ public final class AkachiLauncher {
     private void finishAuthentication(AuthResult result, String username) {
         try {
             Files.createDirectories(MINECRAFT_DIRECTORY);
+            persistAuthSession(result);
             String authJson = "{\"access_token\":" + jsonQuote(result.accessToken())
                     + ",\"minecraft_username\":" + jsonQuote(username) + "}";
             Files.writeString(authFilePath(), authJson, StandardCharsets.UTF_8,
@@ -841,8 +1079,82 @@ public final class AkachiLauncher {
         return username != null && username.matches("[A-Za-z0-9_]{3,16}");
     }
 
+    private static String maskEmail(String email) {
+        if (email == null) return "";
+        int at = email.indexOf('@');
+        if (at <= 0 || at == email.length() - 1) return email;
+        String localPart = email.substring(0, at);
+        int visibleCharacters = Math.min(2, localPart.length());
+        int hiddenCharacters = Math.max(2, localPart.length() - visibleCharacters);
+        return localPart.substring(0, visibleCharacters) + "*".repeat(hiddenCharacters) + email.substring(at);
+    }
+
     private static Path authFilePath() {
         return MINECRAFT_DIRECTORY.resolve("akachi-auth.json");
+    }
+
+    private static Path sessionFilePath() {
+        return AKACHI_DIRECTORY.resolve("Launcher").resolve("session.json");
+    }
+
+    private void persistAuthSession(AuthResult result) throws IOException {
+        if (result.refreshToken().isBlank()) return;
+        Files.createDirectories(sessionFilePath().getParent());
+        String session = "{\"refresh_token\":" + jsonQuote(result.refreshToken()) + "}";
+        Files.writeString(sessionFilePath(), session, StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+        restrictSessionFilePermissions();
+    }
+
+    private void restrictSessionFilePermissions() {
+        try {
+            AclFileAttributeView acl = Files.getFileAttributeView(sessionFilePath(), AclFileAttributeView.class);
+            if (acl == null) return;
+            AclEntry ownerOnly = AclEntry.newBuilder()
+                    .setType(AclEntryType.ALLOW)
+                    .setPrincipal(acl.getOwner())
+                    .setPermissions(EnumSet.allOf(AclEntryPermission.class))
+                    .build();
+            acl.setAcl(List.of(ownerOnly));
+        } catch (IOException | UnsupportedOperationException ignored) {
+            // AppData's per-user permissions remain the fallback on filesystems without ACL support.
+        }
+    }
+
+    private void restoreSavedSession() {
+        Path sessionPath = sessionFilePath();
+        if (!Files.isRegularFile(sessionPath)) return;
+        final String refreshToken;
+        try {
+            refreshToken = jsonText(Files.readString(sessionPath, StandardCharsets.UTF_8), "refresh_token");
+        } catch (IOException ex) {
+            setAuthMessage("Kaydedilmiş oturum okunamadı; tekrar giriş yap.", RED);
+            return;
+        }
+        if (refreshToken.isBlank()) {
+            setAuthMessage("Kaydedilmiş oturum geçersiz; tekrar giriş yap.", RED);
+            return;
+        }
+
+        setAuthBusy(true, "Kaydedilmiş oturum açılıyor…");
+        new SwingWorker<AuthResult, Void>() {
+            @Override protected AuthResult doInBackground() throws Exception {
+                String payload = "{\"refresh_token\":" + jsonQuote(refreshToken) + "}";
+                return sendAuthRequest("/auth/v1/token?grant_type=refresh_token", payload);
+            }
+
+            @Override protected void done() {
+                try {
+                    AuthResult result = get();
+                    if (result.accessToken().isBlank() || result.userId().isBlank()) {
+                        throw new IOException("Yenilenen oturum bilgisi eksik.");
+                    }
+                    continueAuthentication(result, "");
+                } catch (Exception ex) {
+                    setAuthBusy(false, "Oturum yenilenemedi. Tekrar giriş yapabilirsin.");
+                }
+            }
+        }.execute();
     }
 
     private AuthResult beginDiscordOAuth() throws Exception {
@@ -982,7 +1294,7 @@ public final class AkachiLauncher {
         JLabel brand = new JLabel("Akachi Launcher");
         brand.setFont(new Font("Segoe UI", Font.BOLD, 20));
         brand.setForeground(RED);
-        JLabel version = new JLabel("LAUNCHER  ·  BETA");
+        JLabel version = new JLabel("LAUNCHER  ·  " + LAUNCHER_VERSION);
         version.setFont(new Font("Segoe UI", Font.BOLD, 11));
         version.setForeground(MUTED);
         identity.add(brand);
@@ -1321,11 +1633,158 @@ public final class AkachiLauncher {
                 g.dispose();
             }
         });
+        updateButton.setPreferredSize(new Dimension(112, 42));
+        updateButton.setVisible(false);
+        updateButton.addActionListener(e -> downloadAndInstallUpdate());
         launchButton.addActionListener(e -> installAndOpenMinecraft());
         rightControls.add(repository);
+        rightControls.add(updateButton);
         rightControls.add(launchButton);
         footer.add(rightControls, BorderLayout.EAST);
         return footer;
+    }
+
+    private void checkForLauncherUpdate() {
+        checkForLauncherUpdate(null, null);
+    }
+
+    private void checkForLauncherUpdate(JLabel resultLabel, JButton triggerButton) {
+        if (triggerButton != null) {
+            triggerButton.setEnabled(false);
+            resultLabel.setText("Sürüm denetleniyor…");
+            resultLabel.setForeground(BLUE);
+        }
+        new SwingWorker<String, Void>() {
+            @Override protected String doInBackground() throws Exception {
+                URI uri = URI.create(VERSION_URL + "?check=" + System.currentTimeMillis());
+                HttpRequest request = HttpRequest.newBuilder(uri)
+                        .timeout(Duration.ofSeconds(12))
+                        .header("User-Agent", "AkachiLauncher/" + LAUNCHER_VERSION)
+                        .header("Cache-Control", "no-cache")
+                        .GET().build();
+                HttpResponse<String> response = httpClient().send(request,
+                        HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                if (response.statusCode() != 200) throw new IOException("Sürüm bilgisi alınamadı.");
+                return response.body().trim();
+            }
+
+            @Override protected void done() {
+                if (triggerButton != null) triggerButton.setEnabled(true);
+                try {
+                    String latestVersion = get();
+                    if (compareVersions(latestVersion, LAUNCHER_VERSION) > 0) {
+                        updateButton.setText("Güncelleme var");
+                        updateButton.setVisible(true);
+                        footerStatus.setText("Akachi Launcher " + latestVersion + " güncellemesi hazır");
+                        if (resultLabel != null) {
+                            resultLabel.setText("Yeni sürüm bulundu: " + latestVersion);
+                            resultLabel.setForeground(GREEN);
+                        }
+                        frame.revalidate();
+                    } else if (resultLabel != null) {
+                        resultLabel.setText("Launcher güncel · " + LAUNCHER_VERSION);
+                        resultLabel.setForeground(GREEN);
+                    }
+                } catch (Exception ex) {
+                    if (resultLabel != null) {
+                        resultLabel.setText("Güncelleme kontrol edilemedi");
+                        resultLabel.setForeground(RED);
+                    }
+                    // Update checks are best-effort and must not block normal launcher use.
+                }
+            }
+        }.execute();
+    }
+
+    private void downloadAndInstallUpdate() {
+        updateButton.setEnabled(false);
+        updateButton.setText("İndiriliyor…");
+        Path updateDirectory = AKACHI_DIRECTORY.resolve("Launcher").resolve("updates");
+        Path installer = updateDirectory.resolve("AkachiLauncherSetup.exe");
+        Path temporary = updateDirectory.resolve("AkachiLauncherSetup.exe.part");
+
+        new SwingWorker<Path, String>() {
+            @Override protected Path doInBackground() throws Exception {
+                Files.createDirectories(updateDirectory);
+                URI uri = URI.create(SETUP_DOWNLOAD_URL + "?download=" + System.currentTimeMillis());
+                HttpRequest request = HttpRequest.newBuilder(uri)
+                        .timeout(Duration.ofMinutes(5))
+                        .header("User-Agent", "AkachiLauncher/" + LAUNCHER_VERSION)
+                        .GET().build();
+                HttpResponse<InputStream> response = httpClient().send(request,
+                        HttpResponse.BodyHandlers.ofInputStream());
+                if (response.statusCode() != 200) {
+                    response.body().close();
+                    throw new IOException("Güncelleme indirilemedi (HTTP " + response.statusCode() + ").");
+                }
+                long total = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
+                long downloaded = 0;
+                try (InputStream in = response.body(); var out = Files.newOutputStream(temporary,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+                    byte[] buffer = new byte[64 * 1024];
+                    int read;
+                    while ((read = in.read(buffer)) != -1) {
+                        out.write(buffer, 0, read);
+                        downloaded += read;
+                        if (downloaded % (4 * 1024 * 1024) < buffer.length) {
+                            publish(total > 0
+                                    ? "Güncelleme indiriliyor · " + (downloaded * 100 / total) + "%"
+                                    : "Güncelleme indiriliyor…");
+                        }
+                    }
+                }
+                if (Files.size(temporary) < 10_000_000L) {
+                    Files.deleteIfExists(temporary);
+                    throw new IOException("İndirilen setup dosyası eksik görünüyor.");
+                }
+                try {
+                    Files.move(temporary, installer, StandardCopyOption.REPLACE_EXISTING,
+                            StandardCopyOption.ATOMIC_MOVE);
+                } catch (AtomicMoveNotSupportedException ex) {
+                    Files.move(temporary, installer, StandardCopyOption.REPLACE_EXISTING);
+                }
+                return installer;
+            }
+
+            @Override protected void process(List<String> messages) {
+                if (!messages.isEmpty()) footerStatus.setText(messages.get(messages.size() - 1));
+            }
+
+            @Override protected void done() {
+                try {
+                    Path downloadedInstaller = get();
+                    footerStatus.setText("Güncelleme kuruluyor · launcher yeniden açılacak");
+                    new ProcessBuilder(downloadedInstaller.toString())
+                            .directory(downloadedInstaller.getParent().toFile())
+                            .start();
+                    frame.dispose();
+                    System.exit(0);
+                } catch (Exception ex) {
+                    updateButton.setEnabled(true);
+                    updateButton.setText("Güncelleme var");
+                    footerStatus.setText("Güncelleme başarısız: " + rootMessage(ex));
+                }
+            }
+        }.execute();
+    }
+
+    private static int compareVersions(String first, String second) {
+        String[] left = first.trim().replaceFirst("^[vV]", "").split("\\.");
+        String[] right = second.trim().replaceFirst("^[vV]", "").split("\\.");
+        int length = Math.max(left.length, right.length);
+        for (int i = 0; i < length; i++) {
+            int a = i < left.length ? versionPart(left[i]) : 0;
+            int b = i < right.length ? versionPart(right[i]) : 0;
+            if (a != b) return Integer.compare(a, b);
+        }
+        return 0;
+    }
+
+    private static int versionPart(String value) {
+        Matcher matcher = Pattern.compile("^\\s*(\\d+)").matcher(value);
+        if (!matcher.find()) return 0;
+        try { return Integer.parseInt(matcher.group(1)); }
+        catch (NumberFormatException ignored) { return 0; }
     }
 
     private void checkServer() {
@@ -1583,17 +2042,20 @@ public final class AkachiLauncher {
             }
 
             @Override protected void done() {
-                launchButton.setEnabled(authenticated);
                 try {
                     get();
-                    footerStatus.setText("Minecraft " + MINECRAFT_VERSION + " · Forge " + FORGE_VERSION + " hazır");
-                try {
-                    applyRamSettingToForgeProfile();
-                } catch (IOException profileError) {
-                    footerStatus.setText("RAM ayarı uygulanamadı; Minecraft Launcher ayarlarını kontrol et");
-                }
+                    updateLaunchButtonLabel();
+                    launchButton.setEnabled(authenticated);
+                    footerStatus.setText("Forge hazır · Minecraft Launcher açılıyor…");
+                    try {
+                        selectForgeLauncherProfile(gameDirectory);
+                        applyRamSettingToForgeProfile();
+                    } catch (IOException profileError) {
+                        footerStatus.setText("Forge kuruldu; profil seçimi otomatik yapılamadı");
+                    }
                     openMinecraftLauncher();
                 } catch (Exception ex) {
+                    launchButton.setEnabled(authenticated);
                     footerStatus.setText("Forge kurulumu başarısız oldu");
                     showMessage("Forge " + MINECRAFT_VERSION + "-" + FORGE_VERSION + " kurulamadı.\n\n"
                             + rootMessage(ex));
@@ -1681,6 +2143,78 @@ public final class AkachiLauncher {
                 StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
     }
 
+    private boolean isForgeInstalled() {
+        return Files.isRegularFile(MINECRAFT_DIRECTORY.resolve("versions").resolve(FORGE_PROFILE)
+                .resolve(FORGE_PROFILE + ".json"));
+    }
+
+    private void updateLaunchButtonLabel() {
+        launchButton.setText(isForgeInstalled() ? "Oyuna gir" : "Oyunu kur ve aç");
+    }
+
+    private void selectForgeLauncherProfile(Path gameDirectory) throws IOException {
+        Path profilesFile = gameDirectory.resolve("launcher_profiles.json");
+        if (!Files.isRegularFile(profilesFile)) {
+            Path storeProfiles = gameDirectory.resolve("launcher_profiles_microsoft_store.json");
+            if (Files.isRegularFile(storeProfiles)) profilesFile = storeProfiles;
+        }
+        if (!Files.isRegularFile(profilesFile)) return;
+        String json = Files.readString(profilesFile, StandardCharsets.UTF_8);
+        String profileId = "akachi-forge-" + MINECRAFT_VERSION.replace(".", "");
+        String timestamp = java.time.Instant.now().toString();
+        String profilesKey = "\"profiles\"";
+        int profilesKeyAt = json.indexOf(profilesKey);
+        if (profilesKeyAt < 0) throw new IOException("Minecraft profilleri bulunamadı.");
+        int profilesStart = json.indexOf('{', profilesKeyAt + profilesKey.length());
+        int profilesEnd = matchingJsonObjectEnd(json, profilesStart);
+        if (profilesStart < 0 || profilesEnd < 0) throw new IOException("Minecraft profil listesi okunamadı.");
+
+        String profileMarker = jsonQuote(profileId) + ":";
+        if (!json.substring(profilesStart + 1, profilesEnd).contains(profileMarker)) {
+            String profile = "\n    " + profileMarker + " {\n"
+                    + "      \"name\": \"Akachi Forge " + MINECRAFT_VERSION + "\",\n"
+                    + "      \"type\": \"custom\",\n"
+                    + "      \"created\": " + jsonQuote(timestamp) + ",\n"
+                    + "      \"lastUsed\": " + jsonQuote(timestamp) + ",\n"
+                    + "      \"lastVersionId\": " + jsonQuote(FORGE_PROFILE) + ",\n"
+                    + "      \"gameDir\": " + jsonQuote(gameDirectory.toString()) + "\n"
+                    + "    },";
+            json = json.substring(0, profilesStart + 1) + profile + json.substring(profilesStart + 1);
+        }
+        java.util.regex.Pattern selected = java.util.regex.Pattern.compile(
+                "\\\"selectedProfile\\\"\\s*:\\s*(?:\\\"(?:\\\\.|[^\\\"\\\\])*\\\"|null)");
+        java.util.regex.Matcher matcher = selected.matcher(json);
+        if (matcher.find()) {
+            json = matcher.replaceFirst(java.util.regex.Matcher.quoteReplacement("\"selectedProfile\": " + jsonQuote(profileId)));
+        } else {
+            int rootStart = json.indexOf('{');
+            if (rootStart < 0) throw new IOException("Minecraft başlatıcı ayarları okunamadı.");
+            json = json.substring(0, rootStart + 1) + "\n  \"selectedProfile\": " + jsonQuote(profileId) + "," + json.substring(rootStart + 1);
+        }
+        Files.writeString(profilesFile, json, StandardCharsets.UTF_8,
+                StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+    }
+
+    private static int matchingJsonObjectEnd(String json, int start) {
+        if (start < 0 || start >= json.length() || json.charAt(start) != '{') return -1;
+        boolean inString = false;
+        boolean escaped = false;
+        int depth = 0;
+        for (int i = start; i < json.length(); i++) {
+            char ch = json.charAt(i);
+            if (inString) {
+                if (escaped) escaped = false;
+                else if (ch == '\\') escaped = true;
+                else if (ch == '"') inString = false;
+                continue;
+            }
+            if (ch == '"') inString = true;
+            else if (ch == '{') depth++;
+            else if (ch == '}' && --depth == 0) return i;
+        }
+        return -1;
+    }
+
     private static String javaExecutable() {
         Path java = Path.of(System.getProperty("java.home"), "bin", "java.exe");
         return Files.isRegularFile(java) ? java.toString() : "java";
@@ -1704,20 +2238,14 @@ public final class AkachiLauncher {
             } else {
                 new ProcessBuilder("MinecraftLauncher.exe", "--workDir", MINECRAFT_DIRECTORY.toString()).start();
             }
-            JOptionPane.showMessageDialog(frame,
-                    "Minecraft Launcher açıldı. Forge " + MINECRAFT_VERSION + "-" + FORGE_VERSION
-                            + " profilini seçip Microsoft hesabınla oyunu başlat.",
-                    "Akachi Launcher", JOptionPane.INFORMATION_MESSAGE);
+            footerStatus.setText("Minecraft Launcher açıldı · Akachi Forge profilinde Oyna'ya bas.");
         } catch (Exception ex) {
             try {
                 if (!Desktop.isDesktopSupported()) throw new IOException("Minecraft Launcher bulunamadı.");
                 Desktop.getDesktop().browse(URI.create("minecraft://"));
-                showMessage("Forge profili " + MINECRAFT_DIRECTORY + " içine kuruldu. Minecraft Launcher'da oyun klasörü olarak bu yolu seçip Forge "
-                        + MINECRAFT_VERSION + "-" + FORGE_VERSION + " profilini başlat.");
+                footerStatus.setText("Minecraft Launcher açıldı · Akachi Forge profilinde Oyna'ya bas.");
             } catch (Exception fallbackError) {
-                showMessage("Forge profili kuruldu. Minecraft Launcher'ı açıp oyun klasörü olarak "
-                        + MINECRAFT_DIRECTORY + " yolunu ve Forge " + MINECRAFT_VERSION + "-" + FORGE_VERSION
-                        + " profilini seç.");
+                footerStatus.setText("Forge kuruldu fakat Minecraft Launcher açılamadı.");
             }
         }
     }
