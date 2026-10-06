@@ -97,7 +97,7 @@ import static java.awt.GridBagConstraints.WEST;
 public final class AkachiLauncher {
     private static final String REPOSITORY = "Xlorian35/Akachi-Minecraft-server";
     private static final String BRANCH = "main";
-    private static final String LAUNCHER_VERSION = "V0.5";
+    private static final String LAUNCHER_VERSION = "V0.7";
     private static final String VERSION_URL = "https://raw.githubusercontent.com/" + REPOSITORY + "/" + BRANCH + "/launcher/version.txt";
     private static final String SETUP_DOWNLOAD_URL = "https://raw.githubusercontent.com/" + REPOSITORY + "/" + BRANCH + "/AkachiLauncherSetup.exe";
     private static final String MINECRAFT_VERSION = "1.20.1";
@@ -2231,34 +2231,78 @@ public final class AkachiLauncher {
     }
 
     private void openMinecraftLauncher() {
+        Exception launchError = null;
         try {
             Path executable = findMinecraftLauncher();
-            if (executable != null) {
-                new ProcessBuilder(executable.toString(), "--workDir", MINECRAFT_DIRECTORY.toString()).start();
-            } else {
-                new ProcessBuilder("MinecraftLauncher.exe", "--workDir", MINECRAFT_DIRECTORY.toString()).start();
-            }
-            footerStatus.setText("Minecraft Launcher açıldı · Akachi Forge profilinde Oyna'ya bas.");
+            if (executable == null) throw new IOException("Minecraft Launcher masaüstü sürümü bulunamadı.");
+            new ProcessBuilder(executable.toString(), "--workDir", MINECRAFT_DIRECTORY.toString()).start();
+            footerStatus.setText("Minecraft Launcher açılıyor · Akachi Forge profilinde Oyna'ya bas.");
+            return;
         } catch (Exception ex) {
-            try {
-                if (!Desktop.isDesktopSupported()) throw new IOException("Minecraft Launcher bulunamadı.");
-                Desktop.getDesktop().browse(URI.create("minecraft://"));
-                footerStatus.setText("Minecraft Launcher açıldı · Akachi Forge profilinde Oyna'ya bas.");
-            } catch (Exception fallbackError) {
-                footerStatus.setText("Forge kuruldu fakat Minecraft Launcher açılamadı.");
-            }
+            launchError = ex;
         }
+
+        try {
+            Path alias = findMinecraftLauncherAlias();
+            if (alias != null) {
+                String command = "start \"\" \"" + alias + "\" --workDir \"" + MINECRAFT_DIRECTORY + "\"";
+                new ProcessBuilder("cmd.exe", "/d", "/c", command).start();
+                footerStatus.setText("Minecraft Launcher açılıyor · Akachi Forge profilinde Oyna'ya bas.");
+                return;
+            }
+        } catch (Exception ignored) {
+            // Continue with packaged-app activation below.
+        }
+
+        try {
+            String appId = findMinecraftLauncherAppId();
+            if (appId != null && !appId.isBlank()) {
+                new ProcessBuilder("explorer.exe", "shell:AppsFolder\\" + appId).start();
+                footerStatus.setText("Minecraft Launcher açılıyor · Akachi Forge profilini seçip Oyna'ya bas.");
+                return;
+            }
+        } catch (Exception ignored) {
+            // Report a useful recovery step below.
+        }
+
+        String detail = launchError == null ? "" : " · " + rootMessage(launchError);
+        footerStatus.setText("Forge kuruldu. Minecraft Launcher bulunamadı; resmi Minecraft Launcher'ı kurup tekrar dene." + detail);
     }
 
     private static Path findMinecraftLauncher() {
         List<Path> candidates = new ArrayList<>();
         String programFilesX86 = System.getenv("ProgramFiles(x86)");
         String programFiles = System.getenv("ProgramFiles");
-        String localAppData = System.getenv("LOCALAPPDATA");
         if (programFilesX86 != null) candidates.add(Path.of(programFilesX86, "Minecraft Launcher", "MinecraftLauncher.exe"));
         if (programFiles != null) candidates.add(Path.of(programFiles, "Minecraft Launcher", "MinecraftLauncher.exe"));
-        if (localAppData != null) candidates.add(Path.of(localAppData, "Microsoft", "WindowsApps", "MinecraftLauncher.exe"));
         return candidates.stream().filter(Files::isRegularFile).findFirst().orElse(null);
+    }
+
+    private static Path findMinecraftLauncherAlias() {
+        String localAppData = System.getenv("LOCALAPPDATA");
+        if (localAppData == null || localAppData.isBlank()) return null;
+        Path alias = Path.of(localAppData, "Microsoft", "WindowsApps", "MinecraftLauncher.exe");
+        return Files.exists(alias) ? alias : null;
+    }
+
+    private static String findMinecraftLauncherAppId() throws Exception {
+        Path output = Files.createTempFile("akachi-minecraft-app-", ".txt");
+        try {
+            String script = "$app = Get-StartApps | Where-Object { $_.Name -like '*Minecraft Launcher*' } | Select-Object -First 1; "
+                    + "if ($app) { [Console]::Write($app.AppID) }";
+            Process process = new ProcessBuilder("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
+                    .redirectErrorStream(true)
+                    .redirectOutput(output.toFile())
+                    .start();
+            if (!process.waitFor(8, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                return null;
+            }
+            String appId = Files.readString(output, StandardCharsets.UTF_8).trim();
+            return appId.matches("[A-Za-z0-9._!-]+") ? appId : null;
+        } finally {
+            Files.deleteIfExists(output);
+        }
     }
 
     private static Path appDataDirectory() {
