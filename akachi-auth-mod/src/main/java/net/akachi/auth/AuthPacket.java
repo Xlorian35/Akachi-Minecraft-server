@@ -18,7 +18,8 @@ public record AuthPacket(String accessToken) {
     public static void handle(AuthPacket packet, Supplier<NetworkEvent.Context> contextSupplier) {
         NetworkEvent.Context context = contextSupplier.get();
         context.enqueueWork(() -> {
-            if (context.getSender() instanceof ServerPlayer player) {
+            ServerPlayer player = context.getSender();
+            if (player != null) {
                 AuthService.verify(player, packet.accessToken());
             }
         });
