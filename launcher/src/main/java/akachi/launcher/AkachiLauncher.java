@@ -85,11 +85,18 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.UUID;
 import java.util.Base64;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 import com.sun.net.httpserver.HttpServer;
 
 import static java.awt.GridBagConstraints.WEST;
@@ -98,6 +105,7 @@ public final class AkachiLauncher {
     private static final String REPOSITORY = "Xlorian35/Akachi-Minecraft-server";
     private static final String BRANCH = "main";
     private static final String LAUNCHER_VERSION = "V0.7";
+    private static final String UPDATE_BUILD = "V0.7.1";
     private static final String VERSION_URL = "https://raw.githubusercontent.com/" + REPOSITORY + "/" + BRANCH + "/launcher/version.txt";
     private static final String SETUP_DOWNLOAD_URL = "https://raw.githubusercontent.com/" + REPOSITORY + "/" + BRANCH + "/AkachiLauncherSetup.exe";
     private static final String MINECRAFT_VERSION = "1.20.1";
@@ -226,7 +234,7 @@ public final class AkachiLauncher {
         ramRow.add(ramLabel, BorderLayout.CENTER);
         ramRow.add(ramSpinner, BorderLayout.EAST);
 
-        JLabel ramHelp = new JLabel("GB · Forge profili bulunduğunda resmi Minecraft Launcher'a uygulanır.");
+        JLabel ramHelp = new JLabel("GB · Doğrudan Minecraft başlatılırken uygulanır.");
         styleLabel(ramHelp, MUTED, 11, false);
         ramHelp.setAlignmentX(Component.LEFT_ALIGNMENT);
 
@@ -266,11 +274,8 @@ public final class AkachiLauncher {
             graphicsPreset = (String) graphicsSelector.getSelectedItem();
             try {
                 saveSettings();
-                boolean applied = applyRamSettingToForgeProfile();
                 applyGraphicsPreset();
-                footerStatus.setText(applied
-                        ? graphicsPreset + " grafik ayarı ve " + ramGb + " GB RAM kaydedildi"
-                        : "Grafikler kaydedildi; Forge profili oluşunca RAM ayarı uygulanacak");
+                footerStatus.setText(graphicsPreset + " grafik ayarı ve " + ramGb + " GB RAM kaydedildi");
                 dialog.dispose();
             } catch (IOException ex) {
                 showMessage("Ayarlar kaydedilemedi.\n\n" + ex.getMessage());
@@ -1659,7 +1664,7 @@ public final class AkachiLauncher {
                 URI uri = URI.create(VERSION_URL + "?check=" + System.currentTimeMillis());
                 HttpRequest request = HttpRequest.newBuilder(uri)
                         .timeout(Duration.ofSeconds(12))
-                        .header("User-Agent", "AkachiLauncher/" + LAUNCHER_VERSION)
+                        .header("User-Agent", "AkachiLauncher/" + UPDATE_BUILD)
                         .header("Cache-Control", "no-cache")
                         .GET().build();
                 HttpResponse<String> response = httpClient().send(request,
@@ -1672,7 +1677,7 @@ public final class AkachiLauncher {
                 if (triggerButton != null) triggerButton.setEnabled(true);
                 try {
                     String latestVersion = get();
-                    if (compareVersions(latestVersion, LAUNCHER_VERSION) > 0) {
+                    if (compareVersions(latestVersion, UPDATE_BUILD) > 0) {
                         updateButton.setText("Güncelleme var");
                         updateButton.setVisible(true);
                         footerStatus.setText("Akachi Launcher " + latestVersion + " güncellemesi hazır");
@@ -1709,7 +1714,7 @@ public final class AkachiLauncher {
                 URI uri = URI.create(SETUP_DOWNLOAD_URL + "?download=" + System.currentTimeMillis());
                 HttpRequest request = HttpRequest.newBuilder(uri)
                         .timeout(Duration.ofMinutes(5))
-                        .header("User-Agent", "AkachiLauncher/" + LAUNCHER_VERSION)
+                        .header("User-Agent", "AkachiLauncher/" + UPDATE_BUILD)
                         .GET().build();
                 HttpResponse<InputStream> response = httpClient().send(request,
                         HttpResponse.BodyHandlers.ofInputStream());
@@ -2032,9 +2037,11 @@ public final class AkachiLauncher {
         footerStatus.setText("Forge " + MINECRAFT_VERSION + "-" + FORGE_VERSION + " kontrol ediliyor…");
         Path gameDirectory = MINECRAFT_DIRECTORY;
 
-        new SwingWorker<Boolean, String>() {
-            @Override protected Boolean doInBackground() throws Exception {
-                return ensureForgeInstalled(gameDirectory, this::publish);
+        String username = currentGameUsername;
+        new SwingWorker<GameLaunchConfig, String>() {
+            @Override protected GameLaunchConfig doInBackground() throws Exception {
+                ensureForgeInstalled(gameDirectory, this::publish);
+                return prepareDirectLaunch(gameDirectory, username, this::publish);
             }
 
             @Override protected void process(List<String> messages) {
@@ -2043,21 +2050,33 @@ public final class AkachiLauncher {
 
             @Override protected void done() {
                 try {
-                    get();
+                    GameLaunchConfig config = get();
                     updateLaunchButtonLabel();
-                    launchButton.setEnabled(authenticated);
-                    footerStatus.setText("Forge hazır · Minecraft Launcher açılıyor…");
-                    try {
-                        selectForgeLauncherProfile(gameDirectory);
-                        applyRamSettingToForgeProfile();
-                    } catch (IOException profileError) {
-                        footerStatus.setText("Forge kuruldu; profil seçimi otomatik yapılamadı");
-                    }
-                    openMinecraftLauncher();
+                    Process game = new ProcessBuilder(config.command)
+                            .directory(gameDirectory.toFile())
+                            .redirectErrorStream(true)
+                            .redirectOutput(ProcessBuilder.Redirect.appendTo(config.logFile.toFile()))
+                            .start();
+                    launchButton.setEnabled(false);
+                    footerStatus.setText("Minecraft " + MINECRAFT_VERSION + " · Forge " + FORGE_VERSION + " açıldı.");
+                    CompletableFuture.runAsync(() -> {
+                        int exitCode;
+                        try { exitCode = game.waitFor(); }
+                        catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                        SwingUtilities.invokeLater(() -> {
+                            launchButton.setEnabled(authenticated);
+                            footerStatus.setText(exitCode == 0
+                                    ? "Minecraft kapandı."
+                                    : "Minecraft açılamadı (" + exitCode + "). Günlük: " + config.logFile);
+                        });
+                    });
                 } catch (Exception ex) {
                     launchButton.setEnabled(authenticated);
-                    footerStatus.setText("Forge kurulumu başarısız oldu");
-                    showMessage("Forge " + MINECRAFT_VERSION + "-" + FORGE_VERSION + " kurulamadı.\n\n"
+                    footerStatus.setText("Minecraft başlatılamadı");
+                    showMessage("Minecraft " + MINECRAFT_VERSION + " başlatılamadı.\n\n"
                             + rootMessage(ex));
                 }
             }
@@ -2114,6 +2133,336 @@ public final class AkachiLauncher {
             throw new IOException("Forge Installer kurulumu tamamlayamadı (çıkış kodu " + exitCode + ").");
         }
         return true;
+    }
+
+    private GameLaunchConfig prepareDirectLaunch(Path gameDirectory, String username,
+                                                   java.util.function.Consumer<String> progress) throws Exception {
+        if (username == null || username.isBlank()) throw new IOException("Akachi hesabına bir Minecraft adı bağla.");
+        Path vanillaDirectory = gameDirectory.resolve("versions").resolve(MINECRAFT_VERSION);
+        Path vanillaJsonFile = vanillaDirectory.resolve(MINECRAFT_VERSION + ".json");
+        Map<String, Object> vanilla = loadVanillaMetadata(gameDirectory, vanillaJsonFile, progress);
+
+        Map<String, Object> client = object(object(vanilla, "downloads"), "client");
+        Path clientJar = vanillaDirectory.resolve(MINECRAFT_VERSION + ".jar");
+        downloadVerified(string(client, "url"), clientJar, string(client, "sha1"), number(client, "size"), progress,
+                "Minecraft istemcisi indiriliyor…");
+
+        Path librariesDirectory = gameDirectory.resolve("libraries");
+        downloadLibraries(list(vanilla, "libraries"), librariesDirectory, progress);
+
+        Map<String, Object> assetIndex = object(vanilla, "assetIndex");
+        String assetIndexId = string(assetIndex, "id");
+        if (assetIndexId.isBlank()) throw new IOException("Minecraft kaynak paketi indeksi bulunamadı.");
+        Path assetsDirectory = gameDirectory.resolve("assets");
+        Path assetIndexFile = assetsDirectory.resolve("indexes").resolve(assetIndexId + ".json");
+        downloadVerified(string(assetIndex, "url"), assetIndexFile, string(assetIndex, "sha1"),
+                number(assetIndex, "size"), progress, "Minecraft kaynak paketi listesi indiriliyor…");
+        downloadAssets(assetIndexFile, assetsDirectory, progress);
+
+        Map<String, Object> forge = readJsonObject(gameDirectory.resolve("versions").resolve(FORGE_PROFILE)
+                .resolve(FORGE_PROFILE + ".json"));
+        downloadLibraries(list(forge, "libraries"), librariesDirectory, progress);
+        Path nativesDirectory = gameDirectory.resolve("versions").resolve(FORGE_PROFILE).resolve("natives");
+        extractWindowsNatives(librariesDirectory, nativesDirectory);
+
+        List<Path> classpathEntries = new ArrayList<>();
+        try (var paths = Files.walk(librariesDirectory)) {
+            paths.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().endsWith(".jar"))
+                    .filter(path -> !path.getFileName().toString().contains("natives-"))
+                    .sorted()
+                    .forEach(classpathEntries::add);
+        }
+        classpathEntries.add(clientJar);
+        String classpath = classpathEntries.stream().map(Path::toString)
+                .collect(java.util.stream.Collectors.joining(java.io.File.pathSeparator));
+
+        String uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8))
+                .toString();
+        List<String> command = new ArrayList<>();
+        command.add(javaExecutable());
+        command.add("-Xmx" + Math.max(2, ramGb) + "G");
+        command.add("-Djava.library.path=" + nativesDirectory);
+        command.add("-Dminecraft.launcher.brand=AkachiLauncher");
+        command.add("-Dminecraft.launcher.version=" + LAUNCHER_VERSION);
+
+        Map<String, Object> arguments = object(forge, "arguments");
+        List<String> jvmArguments = strings(arguments.get("jvm"));
+        if (jvmArguments.isEmpty()) throw new IOException("Forge başlatma ayarları eksik.");
+        Map<String, String> substitutions = Map.of(
+                "${library_directory}", librariesDirectory.toString(),
+                "${classpath_separator}", java.io.File.pathSeparator,
+                "${version_name}", FORGE_PROFILE,
+                "${natives_directory}", nativesDirectory.toString(),
+                "${game_directory}", gameDirectory.toString(),
+                "${assets_root}", assetsDirectory.toString(),
+                "${assets_index_name}", assetIndexId,
+                "${classpath}", classpath,
+                "${launcher_name}", "AkachiLauncher",
+                "${launcher_version}", LAUNCHER_VERSION);
+        for (String argument : jvmArguments) command.add(expandArgument(argument, substitutions));
+        command.add("-cp");
+        command.add(classpath);
+        command.add(string(forge, "mainClass"));
+
+        addGameArgument(command, "--username", username);
+        addGameArgument(command, "--version", FORGE_PROFILE);
+        addGameArgument(command, "--gameDir", gameDirectory.toString());
+        addGameArgument(command, "--assetsDir", assetsDirectory.toString());
+        addGameArgument(command, "--assetIndex", assetIndexId);
+        addGameArgument(command, "--uuid", uuid);
+        addGameArgument(command, "--accessToken", "0");
+        addGameArgument(command, "--clientId", "0");
+        addGameArgument(command, "--xuid", "0");
+        addGameArgument(command, "--userType", "legacy");
+        addGameArgument(command, "--versionType", "release");
+        addGameArgument(command, "--userProperties", "{}");
+        for (String argument : strings(object(forge, "arguments").get("game"))) command.add(argument);
+
+        Path logFile = gameDirectory.resolve("logs").resolve("akachi-launcher.log");
+        Files.createDirectories(logFile.getParent());
+        progress.accept("Minecraft " + MINECRAFT_VERSION + " doğrudan başlatılmaya hazır.");
+        return new GameLaunchConfig(command, logFile);
+    }
+
+    private Map<String, Object> loadVanillaMetadata(Path gameDirectory, Path versionFile,
+                                                     java.util.function.Consumer<String> progress) throws Exception {
+        if (!Files.isRegularFile(versionFile)) {
+            progress.accept("Minecraft " + MINECRAFT_VERSION + " sürüm bilgisi indiriliyor…");
+            String manifestText = downloadText("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json");
+            Map<String, Object> manifest = parseJsonObject(manifestText);
+            Map<String, Object> selected = null;
+            for (Object entry : list(manifest, "versions")) {
+                Map<String, Object> candidate = asObject(entry);
+                if (MINECRAFT_VERSION.equals(string(candidate, "id"))) {
+                    selected = candidate;
+                    break;
+                }
+            }
+            if (selected == null) throw new IOException("Resmi Minecraft sürüm bilgisi bulunamadı.");
+            String metadataUrl = string(selected, "url");
+            String metadata = downloadText(metadataUrl);
+            Files.createDirectories(versionFile.getParent());
+            Files.writeString(versionFile, metadata, StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+        }
+        Map<String, Object> version = readJsonObject(versionFile);
+        if (!MINECRAFT_VERSION.equals(string(version, "id"))) {
+            throw new IOException("Minecraft sürüm dosyası geçersiz.");
+        }
+        return version;
+    }
+
+    private void downloadLibraries(List<Object> libraries, Path root,
+                                   java.util.function.Consumer<String> progress) throws Exception {
+        for (Object value : libraries) {
+            Map<String, Object> library = asObject(value);
+            if (!libraryAllowedOnWindows(library)) continue;
+            Map<String, Object> downloads = object(library, "downloads");
+            Map<String, Object> artifact = object(downloads, "artifact");
+            if (!artifact.isEmpty()) {
+                Path destination = safeChild(root, string(artifact, "path"));
+                downloadVerified(string(artifact, "url"), destination, string(artifact, "sha1"),
+                        number(artifact, "size"), progress, "Minecraft kitaplıkları indiriliyor…");
+            }
+            Map<String, Object> natives = object(library, "natives");
+            String nativeClassifier = string(natives, "windows").replace("${arch}",
+                    System.getProperty("os.arch", "").contains("64") ? "64" : "32");
+            Map<String, Object> classifiers = object(downloads, "classifiers");
+            Map<String, Object> nativeArtifact = object(classifiers, nativeClassifier);
+            if (!nativeArtifact.isEmpty()) {
+                Path destination = safeChild(root, string(nativeArtifact, "path"));
+                downloadVerified(string(nativeArtifact, "url"), destination, string(nativeArtifact, "sha1"),
+                        number(nativeArtifact, "size"), progress, "Minecraft Windows kitaplıkları indiriliyor…");
+            }
+        }
+    }
+
+    private void downloadAssets(Path indexFile, Path assetsDirectory,
+                                java.util.function.Consumer<String> progress) throws Exception {
+        Map<String, Object> index = readJsonObject(indexFile);
+        Map<String, Object> objects = object(index, "objects");
+        List<Future<?>> pending = new ArrayList<>();
+        ExecutorService executor = Executors.newFixedThreadPool(10, runnable -> {
+            Thread thread = new Thread(runnable, "akachi-assets-download");
+            thread.setDaemon(true);
+            return thread;
+        });
+        AtomicInteger completed = new AtomicInteger();
+        try {
+            for (Object value : objects.values()) {
+                Map<String, Object> asset = asObject(value);
+                String hash = string(asset, "hash");
+                if (!hash.matches("[0-9a-fA-F]{40}")) continue;
+                Path destination = assetsDirectory.resolve("objects").resolve(hash.substring(0, 2)).resolve(hash);
+                long size = number(asset, "size");
+                if (Files.isRegularFile(destination) && Files.size(destination) == size) {
+                    completed.incrementAndGet();
+                    continue;
+                }
+                pending.add(executor.submit(() -> {
+                    try {
+                        downloadVerified("https://resources.download.minecraft.net/" + hash.substring(0, 2) + "/" + hash,
+                                destination, hash, size, progress, "Minecraft dosyaları indiriliyor…");
+                        int count = completed.incrementAndGet();
+                        if (count % 100 == 0) progress.accept("Minecraft dosyaları indiriliyor · " + count + "/" + objects.size());
+                    } catch (Exception ex) {
+                        throw new java.util.concurrent.CompletionException(ex);
+                    }
+                }));
+            }
+            for (Future<?> future : pending) future.get();
+        } finally {
+            executor.shutdownNow();
+        }
+        progress.accept("Minecraft kaynak dosyaları hazır.");
+    }
+
+    private static boolean libraryAllowedOnWindows(Map<String, Object> library) {
+        List<Object> rules = list(library, "rules");
+        if (rules.isEmpty()) return true;
+        boolean allowed = false;
+        for (Object value : rules) {
+            Map<String, Object> rule = asObject(value);
+            Map<String, Object> os = object(rule, "os");
+            String name = string(os, "name");
+            if (name.isBlank() || "windows".equalsIgnoreCase(name)) {
+                allowed = "allow".equalsIgnoreCase(string(rule, "action"));
+            }
+        }
+        return allowed;
+    }
+
+    private static void extractWindowsNatives(Path librariesDirectory, Path nativesDirectory) throws IOException {
+        Files.createDirectories(nativesDirectory);
+        try (var paths = Files.walk(librariesDirectory)) {
+            for (Path archive : paths.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().contains("natives-windows")
+                            && path.getFileName().toString().endsWith(".jar")).toList()) {
+                try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(archive))) {
+                    ZipEntry entry;
+                    while ((entry = zip.getNextEntry()) != null) {
+                        if (entry.isDirectory()) continue;
+                        String name = entry.getName();
+                        if (name.startsWith("META-INF/")) continue;
+                        Path output = nativesDirectory.resolve(name).normalize();
+                        if (!output.startsWith(nativesDirectory.normalize())) {
+                            throw new IOException("Minecraft yerel kitaplığında geçersiz dosya yolu var.");
+                        }
+                        Files.createDirectories(output.getParent());
+                        Files.copy(zip, output, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                }
+            }
+        }
+    }
+
+    private static Path safeChild(Path root, String relative) throws IOException {
+        Path normalizedRoot = root.toAbsolutePath().normalize();
+        Path child = normalizedRoot.resolve(relative.replace('/', java.io.File.separatorChar)).normalize();
+        if (!child.startsWith(normalizedRoot)) throw new IOException("Minecraft kitaplığında geçersiz dosya yolu var.");
+        return child;
+    }
+
+    private void downloadVerified(String url, Path destination, String sha1, long expectedSize,
+                                  java.util.function.Consumer<String> progress, String message) throws Exception {
+        if (url == null || url.isBlank()) throw new IOException("Minecraft indirme adresi eksik.");
+        if (Files.isRegularFile(destination)) {
+            boolean sizeMatches = expectedSize <= 0 || Files.size(destination) == expectedSize;
+            boolean hashMatches = sha1 == null || sha1.isBlank() || fileSha1(destination).equalsIgnoreCase(sha1);
+            if (sizeMatches && hashMatches) return;
+        }
+        Files.createDirectories(destination.getParent());
+        Path temporary = destination.resolveSibling(destination.getFileName() + ".akachi-part");
+        progress.accept(message);
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(3))
+                .header("User-Agent", "AkachiLauncher/" + UPDATE_BUILD).GET().build();
+        HttpResponse<InputStream> response = httpClient().send(request, HttpResponse.BodyHandlers.ofInputStream());
+        if (response.statusCode() != 200) {
+            response.body().close();
+            throw new IOException("Minecraft dosyası indirilemedi (HTTP " + response.statusCode() + ").");
+        }
+        try (InputStream input = response.body(); var output = Files.newOutputStream(temporary,
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+            input.transferTo(output);
+        } catch (Exception ex) {
+            Files.deleteIfExists(temporary);
+            throw ex;
+        }
+        if (expectedSize > 0 && Files.size(temporary) != expectedSize
+                || sha1 != null && !sha1.isBlank() && !fileSha1(temporary).equalsIgnoreCase(sha1)) {
+            Files.deleteIfExists(temporary);
+            throw new IOException("Minecraft dosyasının bütünlük doğrulaması başarısız.");
+        }
+        try {
+            Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException ex) {
+            Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private String downloadText(String url) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(45))
+                .header("User-Agent", "AkachiLauncher/" + UPDATE_BUILD).GET().build();
+        HttpResponse<String> response = httpClient().send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (response.statusCode() != 200) throw new IOException("Minecraft sürüm bilgisi indirilemedi (HTTP " + response.statusCode() + ").");
+        return response.body();
+    }
+
+    private static void addGameArgument(List<String> command, String name, String value) {
+        command.add(name);
+        command.add(value);
+    }
+
+    private static String expandArgument(String value, Map<String, String> substitutions) {
+        String expanded = value;
+        for (Map.Entry<String, String> entry : substitutions.entrySet()) {
+            expanded = expanded.replace(entry.getKey(), entry.getValue());
+        }
+        return expanded;
+    }
+
+    private static Map<String, Object> readJsonObject(Path file) throws IOException {
+        return parseJsonObject(Files.readString(file, StandardCharsets.UTF_8));
+    }
+
+    private static Map<String, Object> parseJsonObject(String json) throws IOException {
+        Object value = new JsonReader(json).parse();
+        if (!(value instanceof Map<?, ?> map)) throw new IOException("Minecraft JSON bilgisi geçersiz.");
+        return asObject(map);
+    }
+
+    private static Map<String, Object> asObject(Object value) {
+        if (!(value instanceof Map<?, ?> map)) return Map.of();
+        Map<String, Object> result = new LinkedHashMap<>();
+        map.forEach((key, entry) -> result.put(String.valueOf(key), entry));
+        return result;
+    }
+
+    private static Map<String, Object> object(Map<String, Object> parent, String key) {
+        return asObject(parent.get(key));
+    }
+
+    private static List<Object> list(Map<String, Object> parent, String key) {
+        Object value = parent.get(key);
+        return value instanceof List<?> items ? new ArrayList<>(items) : List.of();
+    }
+
+    private static List<String> strings(Object value) {
+        if (!(value instanceof List<?> items)) return List.of();
+        List<String> result = new ArrayList<>();
+        for (Object item : items) if (item instanceof String text) result.add(text);
+        return result;
+    }
+
+    private static String string(Map<String, Object> parent, String key) {
+        Object value = parent.get(key);
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private static long number(Map<String, Object> parent, String key) {
+        Object value = parent.get(key);
+        return value instanceof Number number ? number.longValue() : 0L;
     }
 
     private static void ensureForgeLauncherProfile(Path gameDirectory) throws IOException {
@@ -2228,81 +2577,6 @@ public final class AkachiLauncher {
             while ((read = in.read(buffer)) != -1) digest.update(buffer, 0, read);
         }
         return HexFormat.of().formatHex(digest.digest());
-    }
-
-    private void openMinecraftLauncher() {
-        Exception launchError = null;
-        try {
-            Path executable = findMinecraftLauncher();
-            if (executable == null) throw new IOException("Minecraft Launcher masaüstü sürümü bulunamadı.");
-            new ProcessBuilder(executable.toString(), "--workDir", MINECRAFT_DIRECTORY.toString()).start();
-            footerStatus.setText("Minecraft Launcher açılıyor · Akachi Forge profilinde Oyna'ya bas.");
-            return;
-        } catch (Exception ex) {
-            launchError = ex;
-        }
-
-        try {
-            Path alias = findMinecraftLauncherAlias();
-            if (alias != null) {
-                String command = "start \"\" \"" + alias + "\" --workDir \"" + MINECRAFT_DIRECTORY + "\"";
-                new ProcessBuilder("cmd.exe", "/d", "/c", command).start();
-                footerStatus.setText("Minecraft Launcher açılıyor · Akachi Forge profilinde Oyna'ya bas.");
-                return;
-            }
-        } catch (Exception ignored) {
-            // Continue with packaged-app activation below.
-        }
-
-        try {
-            String appId = findMinecraftLauncherAppId();
-            if (appId != null && !appId.isBlank()) {
-                new ProcessBuilder("explorer.exe", "shell:AppsFolder\\" + appId).start();
-                footerStatus.setText("Minecraft Launcher açılıyor · Akachi Forge profilini seçip Oyna'ya bas.");
-                return;
-            }
-        } catch (Exception ignored) {
-            // Report a useful recovery step below.
-        }
-
-        String detail = launchError == null ? "" : " · " + rootMessage(launchError);
-        footerStatus.setText("Forge kuruldu. Minecraft Launcher bulunamadı; resmi Minecraft Launcher'ı kurup tekrar dene." + detail);
-    }
-
-    private static Path findMinecraftLauncher() {
-        List<Path> candidates = new ArrayList<>();
-        String programFilesX86 = System.getenv("ProgramFiles(x86)");
-        String programFiles = System.getenv("ProgramFiles");
-        if (programFilesX86 != null) candidates.add(Path.of(programFilesX86, "Minecraft Launcher", "MinecraftLauncher.exe"));
-        if (programFiles != null) candidates.add(Path.of(programFiles, "Minecraft Launcher", "MinecraftLauncher.exe"));
-        return candidates.stream().filter(Files::isRegularFile).findFirst().orElse(null);
-    }
-
-    private static Path findMinecraftLauncherAlias() {
-        String localAppData = System.getenv("LOCALAPPDATA");
-        if (localAppData == null || localAppData.isBlank()) return null;
-        Path alias = Path.of(localAppData, "Microsoft", "WindowsApps", "MinecraftLauncher.exe");
-        return Files.exists(alias) ? alias : null;
-    }
-
-    private static String findMinecraftLauncherAppId() throws Exception {
-        Path output = Files.createTempFile("akachi-minecraft-app-", ".txt");
-        try {
-            String script = "$app = Get-StartApps | Where-Object { $_.Name -like '*Minecraft Launcher*' } | Select-Object -First 1; "
-                    + "if ($app) { [Console]::Write($app.AppID) }";
-            Process process = new ProcessBuilder("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
-                    .redirectErrorStream(true)
-                    .redirectOutput(output.toFile())
-                    .start();
-            if (!process.waitFor(8, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-                return null;
-            }
-            String appId = Files.readString(output, StandardCharsets.UTF_8).trim();
-            return appId.matches("[A-Za-z0-9._!-]+") ? appId : null;
-        } finally {
-            Files.deleteIfExists(output);
-        }
     }
 
     private static Path appDataDirectory() {
@@ -2693,6 +2967,126 @@ public final class AkachiLauncher {
         return cause.getMessage() == null ? cause.toString() : cause.getMessage();
     }
 
+    private static final class JsonReader {
+        private final String source;
+        private int index;
+
+        private JsonReader(String source) { this.source = source; }
+
+        private Object parse() throws IOException {
+            Object value = readValue();
+            skipWhitespace();
+            if (index != source.length()) throw new IOException("Minecraft JSON bilgisinde fazla veri var.");
+            return value;
+        }
+
+        private Object readValue() throws IOException {
+            skipWhitespace();
+            if (index >= source.length()) throw new IOException("Minecraft JSON bilgisi eksik.");
+            return switch (source.charAt(index)) {
+                case '{' -> readObject();
+                case '[' -> readArray();
+                case '"' -> readString();
+                case 't' -> readLiteral("true", Boolean.TRUE);
+                case 'f' -> readLiteral("false", Boolean.FALSE);
+                case 'n' -> readLiteral("null", null);
+                default -> readNumber();
+            };
+        }
+
+        private Map<String, Object> readObject() throws IOException {
+            Map<String, Object> result = new LinkedHashMap<>();
+            index++;
+            skipWhitespace();
+            if (consume('}')) return result;
+            while (true) {
+                skipWhitespace();
+                if (index >= source.length() || source.charAt(index) != '"') throw new IOException("Minecraft JSON anahtarı geçersiz.");
+                String key = readString();
+                skipWhitespace();
+                if (!consume(':')) throw new IOException("Minecraft JSON iki nokta işareti eksik.");
+                result.put(key, readValue());
+                skipWhitespace();
+                if (consume('}')) return result;
+                if (!consume(',')) throw new IOException("Minecraft JSON virgülü eksik.");
+            }
+        }
+
+        private List<Object> readArray() throws IOException {
+            List<Object> result = new ArrayList<>();
+            index++;
+            skipWhitespace();
+            if (consume(']')) return result;
+            while (true) {
+                result.add(readValue());
+                skipWhitespace();
+                if (consume(']')) return result;
+                if (!consume(',')) throw new IOException("Minecraft JSON dizisi geçersiz.");
+            }
+        }
+
+        private String readString() throws IOException {
+            if (!consume('"')) throw new IOException("Minecraft JSON metni geçersiz.");
+            StringBuilder result = new StringBuilder();
+            while (index < source.length()) {
+                char ch = source.charAt(index++);
+                if (ch == '"') return result.toString();
+                if (ch != '\\') {
+                    result.append(ch);
+                    continue;
+                }
+                if (index >= source.length()) throw new IOException("Minecraft JSON kaçış dizisi eksik.");
+                char escaped = source.charAt(index++);
+                switch (escaped) {
+                    case '"', '\\', '/' -> result.append(escaped);
+                    case 'b' -> result.append('\b');
+                    case 'f' -> result.append('\f');
+                    case 'n' -> result.append('\n');
+                    case 'r' -> result.append('\r');
+                    case 't' -> result.append('\t');
+                    case 'u' -> {
+                        if (index + 4 > source.length()) throw new IOException("Minecraft JSON Unicode kaçışı eksik.");
+                        try { result.append((char) Integer.parseInt(source.substring(index, index + 4), 16)); }
+                        catch (NumberFormatException ex) { throw new IOException("Minecraft JSON Unicode kaçışı geçersiz.", ex); }
+                        index += 4;
+                    }
+                    default -> throw new IOException("Minecraft JSON kaçış karakteri geçersiz.");
+                }
+            }
+            throw new IOException("Minecraft JSON metni kapatılmamış.");
+        }
+
+        private Object readNumber() throws IOException {
+            int start = index;
+            while (index < source.length() && "-+0123456789.eE".indexOf(source.charAt(index)) >= 0) index++;
+            if (start == index) throw new IOException("Minecraft JSON değeri geçersiz.");
+            String value = source.substring(start, index);
+            try {
+                if (value.contains(".") || value.contains("e") || value.contains("E")) return Double.parseDouble(value);
+                return Long.parseLong(value);
+            } catch (NumberFormatException ex) {
+                throw new IOException("Minecraft JSON sayısı geçersiz.", ex);
+            }
+        }
+
+        private Object readLiteral(String literal, Object value) throws IOException {
+            if (!source.startsWith(literal, index)) throw new IOException("Minecraft JSON değeri geçersiz.");
+            index += literal.length();
+            return value;
+        }
+
+        private void skipWhitespace() {
+            while (index < source.length() && Character.isWhitespace(source.charAt(index))) index++;
+        }
+
+        private boolean consume(char expected) {
+            if (index >= source.length() || source.charAt(index) != expected) return false;
+            index++;
+            return true;
+        }
+    }
+
+    private record GameLaunchConfig(List<String> command, Path logFile) {}
     private record AuthResult(String accessToken, String refreshToken, String email, String userId) {}
     private record RemoteFile(String name, String downloadUrl, String sha) {}
     private record RemoteAsset(String name, String downloadUrl, String sha) {}

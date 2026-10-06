@@ -1,6 +1,6 @@
 <?xml version="1.0" ?>
 <jpackage-state version="21.0.12.1" platform="windows">
-  <app-version>0.7</app-version>
+  <app-version>0.7.1</app-version>
   <main-launcher>AkachiLauncher</main-launcher>
   <main-class>akachi.launcher.AkachiLauncher</main-class>
   <signed>false</signed>

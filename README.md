@@ -6,14 +6,13 @@ Akachi sunucusu için launcher ve mod paketi deposu.
 
 1. Bilgisayarda JDK 21 kurulu olsun.
 2. `launcher/run.bat` dosyasına çift tıkla.
-3. **Sürümü kur ve aç** düğmesi Minecraft **1.20.1** istemcisini ve **Forge 47.4.26** bileşenlerini ilk kullanımda resmi Forge yükleyicisinden `%APPDATA%\Akachi Launcher\Minecraft` klasörüne indirir, ardından Minecraft Launcher'ı açar.
-4. Resmi Minecraft Launcher'da Microsoft hesabınla giriş yapıp **1.20.1-forge-47.4.26** profilini başlat.
-5. **Sunucu modlarını güncelle** düğmesi, bu depodaki `mods/` dosyalarını Minecraft klasöründeki `mods/` klasörüne eşitler.
-6. Mod Manager, texture pack ve shader pack bölümleri isteğe bağlı içerikleri ilgili klasörlere indirir.
+3. **Oyunu kur ve aç** düğmesi Minecraft **1.20.1** istemcisini, Forge **47.4.26** profilini ve eksik oyun dosyalarını `%APPDATA%\Akachi Launcher\Minecraft` klasörüne indirip oyunu doğrudan başlatır.
+4. **Sunucu modlarını güncelle** düğmesi, bu depodaki `mods/` dosyalarını Minecraft klasöründeki `mods/` klasörüne eşitler.
+5. Mod Manager, texture pack ve shader pack bölümleri isteğe bağlı içerikleri ilgili klasörlere indirir.
 
 Oyun dosyaları ve modlar `%APPDATA%\Akachi Launcher` klasöründe tutulur. Launcher bu klasörü otomatik oluşturur; kurulum yeri seçmen gerekmez.
 
-Launcher sabit olarak Minecraft 1.20.1 ve Forge 47.4.26 kullanır. Minecraft oyun dosyaları Forge yükleyicisi ve resmi Minecraft Launcher üzerinden edinilir; launcher oyun dosyalarını kendi deposunda dağıtmaz.
+Launcher sabit olarak Minecraft 1.20.1 ve Forge 47.4.26 kullanır. Minecraft dosyalarını resmî Mojang indirme adreslerinden edinir; launcher oyun dosyalarını kendi deposunda dağıtmaz.
 
 ## Akachi hesabı ve Minecraft adını bağlama
 
@@ -29,7 +28,7 @@ Discord girişi için Supabase **Authentication → URL Configuration → Redire
 
 Launcher girişi tek başına yeterli değildir. Sunucu da oyuncunun Akachi oturum belirtecini Supabase'te doğrulayıp token'a bağlı Minecraft adını bağlantıdaki Java adıyla karşılaştırmalıdır. Bunun için aynı `akachi-auth-mod` Forge modunun sunucuya ve oyuncu bilgisayarlarına kurulması gerekir. GitHub'da **Actions → Build Akachi Account Guard** çalışınca `akachi-auth-mod` adlı artifact çıkar. Artifact içindeki JAR'ı sunucunun `mods/` klasörüne ve deponun `mods/` klasörüne koyup GitHub Desktop'tan push et; launcher istemci kopyasını GitHub'dan kurar. Mod JAR'ı sunucuda çalışmadan sunucu tarafı kimlik doğrulaması aktif olmaz.
 
-Sunucuda `online-mode=true` ayarını açık tut. Akachi doğrulaması, resmi Minecraft hesabı doğrulamasına ek korumadır; Microsoft/Minecraft Java hesabı gereksiniminin yerini almaz. Böylece başka biri yalnızca aynı oyun adını yazıp giremez: Akachi hesabı da o ada bağlı olmalı ve istemci modunun geçerli token göndermesi gerekir.
+Launcher oyunu Forge istemcisi olarak doğrudan başlatır ve Minecraft oturum anahtarı yerine Akachi hesabına bağlı oyun adını kullanır. Bu özel sunucuda `server.properties` içindeki `online-mode=false` olmalı; Akachi doğrulama modu hem sunucuya hem oyuncuların Forge istemcilerine kurulup etkin olmalıdır. Mod çalışmadan bu giriş yöntemi kullanıcı doğrulaması sağlamaz.
 
 ## Zorunlu sunucu modları
 
@@ -40,9 +39,9 @@ Mod yükleyici: **Forge**
 
 ## Launcher güncellemeleri
 
-Launcher açılışta `launcher/version.txt` sürümünü kontrol eder. Yeni sürüm varsa alt çubukta **Güncelleme var** düğmesi görünür. Düğme güncel `AkachiLauncherSetup.exe` dosyasını indirip kurulum onayını açar; kurulum tamamlanınca launcher yeniden başlar.
+Launcher açılışta `launcher/version.txt` güncelleme yapısını kontrol eder. Yeni yapı varsa alt çubukta **Güncelleme var** düğmesi görünür. Düğme güncel `AkachiLauncherSetup.exe` dosyasını indirip kurulum onayını açar; kurulum tamamlanınca launcher yeniden başlar. İlk kez güncelleme sistemini veya aynı görünen sürümün düzeltmesini yayımlarken `UPDATE_BUILD` ve `launcher/version.txt` değerlerini artır; ekranda görünen `LAUNCHER_VERSION` kullanıcının belirlediği sürüm adıdır.
 
-Yeni launcher sürümü yayımlarken `AkachiLauncher.java` içindeki `LAUNCHER_VERSION` ve `launcher/version.txt` değerlerini birlikte artır, yeni `AkachiLauncherSetup.exe` dosyasını depo köküne koyup üçünü GitHub'a gönder. İlk güncelleme sistemini içeren setup'ı oyuncuların bir kez elle kurması gerekir; sonraki sürümlerde launcher güncellemeyi kendisi bulur.
+Yeni görünen sürüm yayımlarken `AkachiLauncher.java` içindeki `LAUNCHER_VERSION` değerini artır. Her kurulum yayımlamasında ayrıca `UPDATE_BUILD` ile `launcher/version.txt` değerlerini artır, `AkachiLauncherSetup.exe` dosyasını depo köküne koyup GitHub'a gönder. İlk güncelleme sistemini içeren setup'ı oyuncuların bir kez elle kurması gerekir; sonraki sürümlerde launcher güncellemeyi kendisi bulur.
 
 ## İsteğe bağlı içerikler
 
